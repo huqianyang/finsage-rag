@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FinSage 资料导入</title>
+<style>
+  :root{--bg:#f5f7fa;--panel:#fff;--ink:#1f2937;--muted:#6b7280;--line:#e5e7eb;--brand:#1e3a8a;--brand-soft:#e8eefc;--ok:#047857;--ok-soft:#ecfdf5;--err:#b91c1c;--err-soft:#fef2f2;--run:#b45309;--run-soft:#fffbeb}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.6 -apple-system,"Microsoft YaHei","PingFang SC",sans-serif;color:var(--ink);background:var(--bg)}
+  header{background:var(--panel);border-bottom:1px solid var(--line);padding:14px 24px;display:flex;justify-content:space-between;align-items:center}
+  header b{color:var(--brand);font-size:18px}
+  header a{color:var(--brand);font-size:13px}
+  .wrap{max-width:1080px;margin:0 auto;padding:20px 16px;display:grid;gap:16px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .card h3{margin:0 0 12px;font-size:15px}
+  .card h3 small{font-weight:400;font-size:12px;color:var(--muted)}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+  select,input[type=text]{border:1px solid var(--line);border-radius:8px;padding:7px 10px;font:inherit;background:#fff}
+  select.invalid{border-color:var(--err)}
+  .hint{font-size:12px;color:var(--muted)}
+  .drop{margin-top:12px;border:2px dashed #c7d2fe;background:var(--brand-soft);border-radius:12px;padding:28px;text-align:center;color:var(--brand);cursor:pointer}
+  .drop.over{background:#dbe4fb}
+  .drop small{display:block;color:var(--muted);margin-top:4px}
+  .picked{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+  .picked div{display:flex;justify-content:space-between;gap:8px;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px}
+  .picked .bad{background:var(--err-soft);color:var(--err);border-color:#fecaca}
+  .picked .x{border:0;background:none;color:var(--muted);cursor:pointer}
+  .btn{border:0;border-radius:8px;padding:8px 18px;background:var(--brand);color:#fff;font-weight:600;cursor:pointer}
+  .btn[disabled]{opacity:.4;cursor:not-allowed}
+  .task{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px}
+  .task .hd{display:flex;justify-content:space-between;gap:8px;margin-bottom:8px;word-break:break-all}
+  .badge{font-size:12px;border-radius:999px;padding:1px 10px;white-space:nowrap}
+  .b-run{background:var(--run-soft);color:var(--run)}.b-ok{background:var(--ok-soft);color:var(--ok)}.b-err{background:var(--err-soft);color:var(--err)}.b-wait{background:#f3f4f6;color:var(--muted)}
+  .steps{display:grid;grid-template-columns:repeat(6,1fr);gap:6px}
+  .st{font-size:12px;text-align:center;border-radius:6px;padding:6px 4px;background:#f3f4f6;color:var(--muted)}
+  .st.done{background:var(--ok-soft);color:var(--ok)}
+  .st.running{background:var(--run-soft);color:var(--run);font-weight:600}
+  .st.failed{background:var(--err-soft);color:var(--err);font-weight:600}
+  .st.skipped{text-decoration:line-through}
+  .st small{display:block;font-size:11px;opacity:.85}
+  .errmsg{margin-top:8px;font-size:12px;color:var(--err);background:var(--err-soft);border-radius:6px;padding:6px 10px}
+  .empty{color:var(--muted);font-size:13px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:500;white-space:nowrap}
+  td .sub{color:var(--muted);font-size:12px}
+  .pager{display:flex;justify-content:flex-end;gap:8px;margin-top:10px;font-size:13px;color:var(--muted);align-items:center}
+  .pager button{border:1px solid var(--line);background:#fff;border-radius:6px;padding:2px 10px;cursor:pointer}
+  .pager button[disabled]{opacity:.4;cursor:not-allowed}
+  .tablewrap{overflow-x:auto}
+  .toast{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:8px 16px;border-radius:8px;font-size:13px;display:none;z-index:9}
+  @media (max-width:768px){.steps{grid-template-columns:repeat(3,1fr)}header{padding:12px 16px}}
+</style>
+</head>
+<body>
+<header><b>FinSage · 资料导入</b><a id="chatLink" href="#">前往问答页 →</a></header>
+<div class="toast" id="toast"></div>
+<div class="wrap">
+
+  <section class="card">
+    <h3>① 上传资料</h3>
+    <div class="row">
+      <label for="ctype">资料类型 <span style="color:#b91c1c">*</span></label>
+      <select id="ctype"><option value="">请选择资料类型</option></select>
+      <span class="hint">本次选择的文件共用该类型；不同类型请分批上传</span>
+    </div>
+    <div class="drop" id="drop">点击选择或拖拽文件到此处<small>支持 PDF / DOC / DOCX / MD，单个文件不超过 50MB，可多选</small></div>
+    <input type="file" id="fileInput" multiple accept=".pdf,.doc,.docx,.md" hidden>
+    <div class="picked" id="picked"></div>
+    <div class="row" style="margin-top:12px;justify-content:flex-end"><button class="btn" id="startBtn" disabled>开始导入</button></div>
+  </section>
+
+  <section class="card">
+    <h3>② 导入进度 <small>每 2 秒自动刷新；离开页面不影响后台导入</small></h3>
+    <div id="tasks"><div class="empty">暂无导入任务</div></div>
+  </section>
+
+  <section class="card">
+    <h3>③ 已导入资料</h3>
+    <div class="row" style="margin-bottom:10px">
+      <select id="filterType"><option value="">全部类型</option></select>
+      <input type="text" id="keyword" placeholder="按文件名搜索">
+    </div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>资料名称</th><th>类型</th><th>产品 / 机构</th><th>风险等级</th><th>发布时间</th><th>切片数</th><th>状态</th><th>更新时间</th></tr></thead>
+      <tbody id="docRows"><tr><td colspan="8" class="empty">加载中…</td></tr></tbody></table></div>
+    <div class="pager"><span id="total"></span><button id="prev">‹</button><span id="pageNo">1</span><button id="next">›</button></div>
+  </section>
+</div>
+
+<script>
+const MAX_MB = 50, EXTS = ['pdf','doc','docx','md'], SIZE = 20;
+const STEP_LABELS = {parse:'解析文档',image:'处理图片',split:'切分文档',metadata:'抽取元数据',embed:'生成向量',index:'写入向量库'};
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let picked = [], docNames = new Set(), page = 1, typeLabels = {};
+const polling = new Map(); // task_id -> timer
+
+$('chatLink').href = `${location.protocol}//${location.hostname}:8001/`;
+
+function toast(msg){ const t=$('toast'); t.textContent=msg; t.style.display='block'; clearTimeout(t._h); t._h=setTimeout(()=>t.style.display='none',2500); }
+
+async function api(url, opts){
+  let res;
+  try { res = await fetch(url, opts); } catch(e){ throw new Error('无法连接导入服务，请确认服务已启动'); }
+  const body = await res.json().catch(()=>({}));
+  if(!res.ok) throw new Error(body.message || `请求失败（${res.status}）`);
+  return body;
+}
+
+// ---------- 资料类型 ----------
+async function loadTypes(){
+  const list = await api('/api/content-types');
+  for(const t of list){
+    typeLabels[t.code] = t.label;
+    $('ctype').add(new Option(t.label, t.code));
+    $('filterType').add(new Option(t.label, t.code));
+  }
+}
+
+// ---------- 选文件 ----------
+function addFiles(files){
+  for(const f of files){
+    const ext = f.name.split('.').pop().toLowerCase();
+    let error = '';
+    if(!EXTS.includes(ext)) error = '不支持的文件类型，已忽略';
+    else if(f.size > MAX_MB*1024*1024) error = `超过 ${MAX_MB}MB，已忽略`;
+    else if(f.size === 0) error = '文件为空，已忽略';
+    if(picked.some(p => p.file.name === f.name)) continue;
+    picked.push({file:f, error});
+  }
+  renderPicked();
+}
+function renderPicked(){
+  $('picked').innerHTML = picked.map((p,i) => {
+    const kb = (p.file.size/1024).toFixed(0)+' KB';
+    const dup = !p.error && docNames.has(p.file.name) ? ' · <b style="color:#b45309">同名资料已存在，将覆盖</b>' : '';
+    return `<div class="${p.error?'bad':''}"><span>${esc(p.file.name)}</span><span>${p.error?esc(p.error):kb+dup} <button class="x" data-i="${i}" title="移除">✕</button></span></div>`;
+  }).join('');
+  updateStartBtn();
+}
+function updateStartBtn(){
+  const n = picked.filter(p=>!p.error).length;
+  $('startBtn').textContent = n ? `开始导入（${n} 个文件）` : '开始导入';
+  $('startBtn').disabled = !n || !$('ctype').value;
+}
+$('picked').onclick = e => { if(e.target.classList.contains('x')){ picked.splice(+e.target.dataset.i,1); renderPicked(); } };
+$('drop').onclick = () => $('fileInput').click();
+$('fileInput').onchange = e => { addFiles(e.target.files); e.target.value=''; };
+$('drop').ondragover = e => { e.preventDefault(); $('drop').classList.add('over'); };
+$('drop').ondragleave = () => $('drop').classList.remove('over');
+$('drop').ondrop = e => { e.preventDefault(); $('drop').classList.remove('over'); addFiles(e.dataTransfer.files); };
+$('ctype').onchange = () => { $('ctype').classList.remove('invalid'); updateStartBtn(); };
+
+// ---------- 上传 ----------
+$('startBtn').onclick = async () => {
+  if(!$('ctype').value){ $('ctype').classList.add('invalid'); toast('请选择资料类型'); return; }
+  const valid = picked.filter(p=>!p.error);
+  const fd = new FormData();
+  valid.forEach(p => fd.append('files', p.file));
+  fd.append('content_type', $('ctype').value);
+  $('startBtn').disabled = true; $('startBtn').textContent = '上传中…';
+  try{
+    const res = await api('/api/documents', {method:'POST', body:fd});
+    const rejected = res.items.filter(i=>!i.accepted);
+    res.items.filter(i=>i.accepted).forEach(i => track(i.task_id));
+    if(rejected.length) toast(rejected.map(r=>`${r.file_name}：${r.message}`).join('；'));
+    picked = []; renderPicked();
+  }catch(e){ toast(e.message); updateStartBtn(); }
+};
+
+// ---------- 进度 ----------
+function taskCard(t){
+  let badge;
+  if(t.status==='completed'){
+    const secs = t.finished_at && t.started_at ? Math.round((new Date(t.finished_at)-new Date(t.started_at))/1000) : null;
+    const chunks = (t.steps.find(s=>s.code==='split')||{}).message || '';
+    badge = `<span class="badge b-ok">已完成${chunks?' · '+esc(chunks):''}${secs!=null?' · 用时 '+fmtDur(secs):''}</span>`;
+  } else if(t.status==='failed') badge = '<span class="badge b-err">失败</span>';
+  else if(t.status==='pending') badge = '<span class="badge b-wait">排队中</span>';
+  else badge = '<span class="badge b-run">导入中</span>';
+  const steps = t.steps.map(s => {
+    const sub = s.status==='running' ? '进行中…' : s.status==='pending' ? '等待' : s.status==='failed' ? '失败' : (s.message||'');
+    return `<div class="st ${s.status}">${esc(STEP_LABELS[s.code]||s.label)}<small>${esc(sub)}</small></div>`;
+  }).join('');
+  const err = t.error ? `<div class="errmsg">${esc(t.error.message)}。请检查文件后重新上传。</div>` : '';
+  return `<div class="task" id="t_${t.task_id}"><div class="hd"><span>${esc(t.file_name)}</span>${badge}</div><div class="steps">${steps}</div>${err}</div>`;
+}
+function fmtDur(s){ return s>=60 ? `${Math.floor(s/60)}分${s%60}秒` : `${s}秒`; }
+function upsertTask(t){
+  const box = $('tasks');
+  box.querySelector('.empty')?.remove();
+  const old = $('t_'+t.task_id);
+  const html = taskCard(t);
+  if(old) old.outerHTML = html; else box.insertAdjacentHTML('afterbegin', html);
+}
+function track(taskId){
+  if(polling.has(taskId)) return;
+  const tick = async () => {
+    try{
+      const t = await api(`/api/import-tasks/${taskId}`);
+      upsertTask(t);
+      if(t.status==='completed' || t.status==='failed'){ clearInterval(polling.get(taskId)); polling.delete(taskId); loadDocs(); }
+    }catch(e){ /* 网络抖动时下次再试 */ }
+  };
+  tick();
+  polling.set(taskId, setInterval(tick, 2000));
+}
+async function restoreTasks(){
+  try{ const r = await api('/api/import-tasks?status=running'); r.items.reverse().forEach(t => track(t.task_id)); }catch(e){}
+}
+
+// ---------- 资料列表 ----------
+async function loadDocs(){
+  const q = new URLSearchParams({page, size:SIZE});
+  if($('filterType').value) q.set('content_type', $('filterType').value);
+  if($('keyword').value.trim()) q.set('keyword', $('keyword').value.trim());
+  try{
+    const r = await api('/api/documents?'+q);
+    if(!$('filterType').value && !$('keyword').value.trim() && page===1) docNames = new Set(r.items.map(d=>d.file_name));
+    const badge = {completed:'<span class="badge b-ok">已完成</span>',processing:'<span class="badge b-run">导入中</span>',failed:'<span class="badge b-err">失败</span>'};
+    $('docRows').innerHTML = r.items.length ? r.items.map(d => {
+      const m = d.metadata || {};
+      return `<tr><td>${esc(m.document_title || d.file_name)}<div class="sub">${esc(d.file_name)}</div></td>
+        <td>${esc(d.content_type_label)}</td>
+        <td>${esc(m.product_name||'')}${m.product_code?' <span class="sub">'+esc(m.product_code)+'</span>':''}<div class="sub">${esc(m.institution_name||'')}</div></td>
+        <td>${esc(m.risk_level||'—')}</td><td>${esc(m.publish_date||'—')}</td><td>${d.chunk_count}</td>
+        <td>${badge[d.status]||esc(d.status)}</td><td>${fmtTime(d.updated_at)}</td></tr>`;
+    }).join('') : '<tr><td colspan="8" class="empty">暂无资料</td></tr>';
+    const pages = Math.max(1, Math.ceil(r.total/SIZE));
+    $('total').textContent = `共 ${r.total} 条`; $('pageNo').textContent = `${page} / ${pages}`;
+    $('prev').disabled = page<=1; $('next').disabled = page>=pages;
+  }catch(e){ $('docRows').innerHTML = `<tr><td colspan="8" class="empty">${esc(e.message)}</td></tr>`; }
+}
+function fmtTime(s){ if(!s) return ''; const d=new Date(s); return `${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; }
+$('filterType').onchange = () => { page=1; loadDocs(); };
+let kwTimer; $('keyword').oninput = () => { clearTimeout(kwTimer); kwTimer = setTimeout(()=>{ page=1; loadDocs(); }, 300); };
+$('prev').onclick = () => { page--; loadDocs(); };
+$('next').onclick = () => { page++; loadDocs(); };
+
+loadTypes().catch(e=>toast(e.message)); restoreTasks(); loadDocs();
+</script>
+</body>
+</html>
