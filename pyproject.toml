@@ -42,6 +42,8 @@ torch = { path = "D:/ai_models/wheels/torch-2.14.1+cu126-cp313-cp313-win_amd64.w
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = ["integration: 需要真实中间件与模型的集成测试（uv run pytest -m integration）"]
+addopts = "-m 'not integration'"
 
 [tool.ruff]
 line-length = 120

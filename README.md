@@ -49,9 +49,15 @@ uv run python -m scripts.batch_import "<金融/数据 目录>"
 ```
 
 ### 6. 测试
+单元测试：
 ```bash
 uv run pytest -q
 ```
+集成测试（需要中间件、本地模型和已导入的资料；覆盖联网/重排/大模型故障降级、无资料兜底、停止生成）：
+```bash
+uv run pytest -m integration -q
+```
+验收测试（需要两个服务已启动）：
 ```bash
 uv run python -m scripts.eval_questions eval_report.md
 ```
