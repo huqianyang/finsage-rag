@@ -16,6 +16,7 @@ FastAPI · LangGraph · Milvus 2.5（稠密向量 + 内置中文 BM25）· Mongo
 - 中间件：虚拟机 `192.168.10.100` 上的 Milvus 2.5.5、MinIO、MongoDB 7.0（Docker）
 - 本地模型：`D:/ai_models/modelscope_cache/models/BAAI/bge-m3`、`D:/ai_models/rerank/rerank/BAAI/bge-reranker-large`
 - GPU 版 PyTorch wheel：`D:/ai_models/wheels/torch-2.14.1+cu126-cp313-cp313-win_amd64.whl`
+  （官方下载：https://download-r2.pytorch.org/whl/cu126/torch-2.14.1%2Bcu126-cp313-cp313-win_amd64.whl ，约 2.4GB，sha256 `92d0ae66f10ae9dfaaf85d684d6794a3d6ca4ed938dcfaa25e94c54cff3764eb`；放到其他位置时同步修改 `pyproject.toml` 中 `[tool.uv.sources]` 的 torch 路径）
 - Python 3.13、uv
 
 ### 2. 安装与配置
