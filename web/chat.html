@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FinSage 智能金融知识库</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<style>
+  :root{
+    --bg:#f5f7fa; --panel:#fff; --ink:#1f2937; --muted:#6b7280; --line:#e5e7eb;
+    --brand:#1e3a8a; --brand-soft:#e8eefc; --accent:#0f766e;
+    --warn-bg:#fff7ed; --warn-line:#fed7aa; --warn-ink:#9a3412;
+    --err-bg:#fef2f2; --err-line:#fecaca; --err-ink:#b91c1c;
+    --web:#7c3aed; --web-soft:#f3e8ff;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;font:14px/1.6 -apple-system,"Microsoft YaHei","PingFang SC",sans-serif;color:var(--ink);background:var(--bg)}
+  .app{display:grid;grid-template-columns:260px 1fr;height:100vh}
+  aside{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+  .logo{padding:18px 16px 12px;font-weight:700;font-size:18px;color:var(--brand)}
+  .logo small{display:block;font-weight:400;font-size:12px;color:var(--muted)}
+  .new-btn{margin:0 16px 12px;padding:9px;border:1px dashed var(--brand);color:var(--brand);background:var(--brand-soft);border-radius:8px;cursor:pointer;font-weight:600;font:inherit}
+  .sessions{flex:1;overflow:auto;padding:0 8px}
+  .sess{padding:9px 10px;border-radius:8px;cursor:pointer;display:flex;justify-content:space-between;gap:6px;align-items:center}
+  .sess:hover{background:#f3f4f6}
+  .sess.active{background:var(--brand-soft);color:var(--brand);font-weight:600}
+  .sess .t{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .sess .del{visibility:hidden;color:var(--muted);border:0;background:none;cursor:pointer;flex:none}
+  .sess:hover .del,.sess.active .del{visibility:visible}
+  .group{font-size:12px;color:var(--muted);padding:10px 10px 4px}
+  .side-foot{padding:12px 16px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
+  main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relative}
+  .top{padding:12px 24px;border-bottom:1px solid var(--line);background:var(--panel);display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .top strong{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .entity{font-size:12px;background:#ecfdf5;color:var(--accent);border:1px solid #a7f3d0;border-radius:999px;padding:2px 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:50%}
+  .chat{flex:1;overflow:auto;padding:24px}
+  .inner{max-width:820px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+  .msg-user{align-self:flex-end;background:var(--brand);color:#fff;padding:10px 14px;border-radius:14px 14px 2px 14px;max-width:75%;white-space:pre-wrap;word-break:break-word}
+  .msg-bot{align-self:flex-start;background:var(--panel);border:1px solid var(--line);border-radius:2px 14px 14px 14px;padding:16px 18px;width:100%}
+  .body{word-break:break-word}
+  .body p{margin:6px 0}.body ul,.body ol{margin:4px 0;padding-left:22px}
+  .body table{border-collapse:collapse;font-size:13px;margin:6px 0;display:block;overflow-x:auto}
+  .body th,.body td{border:1px solid var(--line);padding:4px 8px}
+  .ref{display:inline-block;font-size:11px;background:var(--brand-soft);color:var(--brand);border-radius:4px;padding:0 4px;margin:0 1px;cursor:pointer;vertical-align:1px;line-height:1.5}
+  .ref.web{background:var(--web-soft);color:var(--web)}
+  .understood{font-size:12px;color:var(--muted);margin-bottom:6px}
+  .notice{margin-top:12px;background:var(--warn-bg);border:1px solid var(--warn-line);color:var(--warn-ink);border-radius:8px;padding:8px 12px;font-size:13px}
+  .notice.rt{background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8}
+  .cites{margin-top:12px;border-top:1px dashed var(--line);padding-top:10px}
+  .cites .h{font-size:12px;color:var(--muted);margin-bottom:6px}
+  .cite{border:1px solid var(--line);border-radius:8px;margin-bottom:6px;font-size:13px;transition:background .3s}
+  .cite.flash{background:var(--brand-soft)}
+  .cite summary{padding:7px 10px;cursor:pointer;display:flex;gap:8px;align-items:center;list-style:none;flex-wrap:wrap}
+  .cite summary::-webkit-details-marker{display:none}
+  .cite .no{font-weight:700;color:var(--brand)}
+  .tag{font-size:11px;padding:0 6px;border-radius:4px;background:#f3f4f6;color:var(--muted);white-space:nowrap}
+  .tag.web{background:var(--web-soft);color:var(--web)}
+  .cite .cbody{padding:0 12px 10px;color:#374151;font-size:12px;word-break:break-word}
+  .cite .meta{color:var(--muted);margin-bottom:4px}
+  .cite a{color:var(--brand)}
+  .actions{margin-top:10px;display:flex;gap:12px;font-size:12px;color:var(--muted);align-items:center}
+  .actions button{border:0;background:none;color:var(--muted);cursor:pointer;padding:0;font:inherit}
+  .actions button:hover{color:var(--brand)}
+  .stage{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px;margin-bottom:6px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);animation:p 1s infinite}
+  @keyframes p{50%{opacity:.3}}
+  .cursor{display:inline-block;width:7px;height:15px;background:var(--ink);vertical-align:-2px;animation:p .8s infinite}
+  .cand{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+  .cand button{text-align:left;border:1px solid var(--line);background:#fff;border-radius:8px;padding:8px 12px;cursor:pointer;font:inherit}
+  .cand button:hover{border-color:var(--brand);background:var(--brand-soft)}
+  .cand button[disabled]{opacity:.5;cursor:not-allowed}
+  .cand small{color:var(--muted)}
+  .err{background:var(--err-bg);border:1px solid var(--err-line);color:var(--err-ink);border-radius:8px;padding:10px 12px}
+  .stopped{font-size:12px;color:var(--muted);margin-top:6px}
+  .welcome{text-align:center;padding:40px 0 10px}
+  .welcome h2{margin:0 0 6px;color:var(--brand)}
+  .welcome p{color:var(--muted);margin:0 0 20px}
+  .samples{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;text-align:left}
+  .samples div{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer}
+  .samples div:hover{border-color:var(--brand)}
+  .samples span{display:block;font-size:12px;color:var(--muted)}
+  .composer{border-top:1px solid var(--line);background:var(--panel);padding:12px 24px 10px}
+  .box{max-width:820px;margin:0 auto;display:flex;gap:10px;align-items:flex-end}
+  textarea{flex:1;resize:none;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font:inherit;height:46px;max-height:140px}
+  textarea:focus{outline:2px solid var(--brand-soft);border-color:var(--brand)}
+  .send{height:46px;padding:0 20px;border:0;border-radius:10px;background:var(--brand);color:#fff;font-weight:600;cursor:pointer;font:inherit;flex:none}
+  .send[disabled]{opacity:.4;cursor:not-allowed}
+  .send.stop{background:#fff;color:var(--err-ink);border:1px solid var(--err-line)}
+  .counter{max-width:820px;margin:4px auto 0;font-size:12px;color:var(--err-ink);display:none}
+  .disclaimer{max-width:820px;margin:6px auto 0;font-size:11px;color:var(--muted);text-align:center}
+  .to-bottom{position:absolute;right:24px;bottom:110px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:4px 12px;cursor:pointer;font-size:12px;color:var(--brand);display:none;box-shadow:0 2px 6px rgba(0,0,0,.08)}
+  .menu-btn{display:none;border:0;background:none;font-size:20px;cursor:pointer}
+  .mask{display:none}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.35);display:none;align-items:center;justify-content:center;z-index:20;padding:16px}
+  .modal .dlg{background:#fff;border-radius:12px;padding:18px 20px;max-width:360px;width:100%}
+  .modal .ops{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}
+  .modal button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 14px;cursor:pointer;font:inherit}
+  .modal button.danger{background:var(--err-ink);color:#fff;border-color:var(--err-ink)}
+  @media (max-width:768px){
+    .app{grid-template-columns:1fr}
+    aside{position:fixed;inset:0 auto 0 0;width:260px;z-index:10;transform:translateX(-100%);transition:.2s}
+    aside.open{transform:none}
+    .mask.open{display:block;position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:9}
+    .menu-btn{display:block}
+    .top,.chat,.composer{padding-left:16px;padding-right:16px}
+    .samples{grid-template-columns:1fr}
+    .entity{max-width:45%}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside id="side">
+    <div class="logo">FinSage 智能金融知识库<small>金融资料查询 · 不构成投资建议</small></div>
+    <button class="new-btn" id="newBtn">＋ 新建会话</button>
+    <div class="sessions" id="sessions"></div>
+    <div class="side-foot">会话保存在本浏览器，清除浏览器数据后将无法找回</div>
+  </aside>
+  <div class="mask" id="mask"></div>
+  <main>
+    <div class="top">
+      <div style="display:flex;gap:10px;align-items:center;min-width:0">
+        <button class="menu-btn" id="menuBtn" aria-label="会话列表">☰</button>
+        <strong id="title">新会话</strong>
+      </div>
+      <span class="entity" id="entity" style="display:none" title="多轮追问将默认围绕该资料"></span>
+    </div>
+    <div class="chat" id="chat"><div class="inner" id="inner"></div></div>
+    <button class="to-bottom" id="toBottom">↓ 回到底部</button>
+    <div class="composer">
+      <div class="box">
+        <textarea id="ta" placeholder="输入你的金融问题，如：华夏债券C主要投资什么？（Enter 发送，Shift+Enter 换行）"></textarea>
+        <button class="send" id="send">发送</button>
+      </div>
+      <div class="counter" id="counter">问题请控制在 500 字以内</div>
+      <div class="disclaimer">回答基于已导入资料生成，仅供参考，不构成投资建议。正式信息以产品合同、公告原文和监管文件为准。</div>
+    </div>
+  </main>
+</div>
+<div class="modal" id="modal"><div class="dlg"><div>删除后无法恢复，确定删除该会话？</div><div class="ops"><button id="mCancel">取消</button><button class="danger" id="mOk">删除</button></div></div></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const SAMPLES = [
+  ['帮我介绍一下华夏债券C','产品问答'],['什么是净值型理财？','金融知识'],
+  ['招商银行一季度营收有什么变化？','公司公告'],['货币政策执行报告的核心内容是什么？','政策资讯'],
+  ['理财产品一定赚钱吗？','风险提示'],['基金赎回多久到账？','业务流程'],
+];
+const STATUS_ERR = {LLM_TIMEOUT:1,LLM_ERROR:1,RETRIEVAL_ERROR:1};
+
+// ---------- 匿名身份 ----------
+function getClientId(){
+  let id = null;
+  try{ id = localStorage.getItem('finsage_client_id'); }catch(e){}
+  if(!id){
+    id = (crypto.randomUUID ? crypto.randomUUID() : 'c'+Date.now()+Math.random().toString(16).slice(2)).replace(/-/g,'');
+    try{ localStorage.setItem('finsage_client_id', id); }catch(e){}
+  }
+  return id;
+}
+const CLIENT_ID = getClientId();
+const H = {'X-Client-Id': CLIENT_ID};
+
+let sessions = [], current = null, streaming = null; // streaming: {ctrl, card, ...}
+
+async function api(url, opts={}){
+  let res;
+  try{ res = await fetch(url, {...opts, headers:{...H, ...(opts.headers||{})}}); }
+  catch(e){ throw new Error('无法连接服务，请确认查询服务已启动后重试。'); }
+  if(res.status === 204) return null;
+  const body = await res.json().catch(()=>({}));
+  if(!res.ok){ const err = new Error(body.message || `请求失败（${res.status}）`); err.status = res.status; throw err; }
+  return body;
+}
+
+// ---------- Markdown 渲染（U3：先转义 < & 再交给 marked，链接只允许 http/https） ----------
+function renderMd(text){
+  const safe = text.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  let html = window.marked ? marked.parse(safe, {gfm:true, breaks:true}) : safe.replace(/\n/g,'<br>');
+  const tpl = document.createElement('template'); tpl.innerHTML = html;
+  tpl.content.querySelectorAll('a').forEach(a => {
+    if(!/^https?:\/\//i.test(a.getAttribute('href')||'')) a.removeAttribute('href');
+    a.target = '_blank'; a.rel = 'noopener noreferrer';
+  });
+  tpl.content.querySelectorAll('script,iframe,object,embed,style').forEach(n => n.remove());
+  return tpl.innerHTML;
+}
+function decorateRefs(el, citations){
+  const types = {}; (citations||[]).forEach(c => types[c.index] = c.source_type);
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const nodes = []; while(walker.nextNode()) nodes.push(walker.currentNode);
+  for(const node of nodes){
+    if(!/\[\d{1,2}\]/.test(node.nodeValue)) continue;
+    const frag = document.createDocumentFragment();
+    node.nodeValue.split(/(\[\d{1,2}\])/).forEach(part => {
+      const m = part.match(/^\[(\d{1,2})\]$/);
+      if(m){ const s=document.createElement('span'); s.className='ref'+(types[m[1]]==='web'?' web':''); s.dataset.ref=m[1]; s.textContent=part; frag.appendChild(s); }
+      else if(part) frag.appendChild(document.createTextNode(part));
+    });
+    node.replaceWith(frag);
+  }
+}
+
+// ---------- 滚动（C8） ----------
+const chatEl = $('chat');
+let stick = true;
+chatEl.addEventListener('scroll', () => {
+  stick = chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight < 40;
+  $('toBottom').style.display = stick ? 'none' : 'block';
+});
+function scrollBottom(force){ if(force || stick){ chatEl.scrollTop = chatEl.scrollHeight; } }
+$('toBottom').onclick = () => { stick = true; scrollBottom(true); };
+
+// ---------- 会话列表 ----------
+function renderSessions(){
+  const today = new Date().toDateString();
+  const groups = {'今天':[], '更早':[]};
+  sessions.forEach(s => groups[new Date(s.updated_at).toDateString()===today?'今天':'更早'].push(s));
+  $('sessions').innerHTML = Object.entries(groups).filter(([,v])=>v.length).map(([g,list]) =>
+    `<div class="group">${g}</div>` + list.map(s =>
+      `<div class="sess ${current && s.session_id===current.session_id?'active':''}" data-id="${s.session_id}"><span class="t">${esc(s.title)}</span><button class="del" data-del="${s.session_id}" title="删除会话">🗑</button></div>`
+    ).join('')).join('');
+}
+async function loadSessions(){ sessions = (await api('/api/sessions')).items; renderSessions(); }
+
+$('sessions').onclick = e => {
+  const del = e.target.closest('[data-del]');
+  if(del){ e.stopPropagation(); confirmDelete(del.dataset.del); return; }
+  const item = e.target.closest('.sess');
+  if(item) openSession(item.dataset.id);
+};
+$('menuBtn').onclick = () => { $('side').classList.add('open'); $('mask').classList.add('open'); };
+$('mask').onclick = closeDrawer;
+function closeDrawer(){ $('side').classList.remove('open'); $('mask').classList.remove('open'); }
+
+function setHeader(s){
+  $('title').textContent = s ? s.title : '新会话';
+  const ent = s && s.locked_entity;
+  $('entity').style.display = ent ? '' : 'none';
+  if(ent) $('entity').textContent = '当前讨论：' + ent.label;
+}
+
+async function openSession(id){
+  if(streaming) stopStreaming();
+  current = sessions.find(s => s.session_id === id) || null;
+  renderSessions(); setHeader(current); closeDrawer();
+  $('inner').innerHTML = '';
+  try{
+    const r = await api(`/api/sessions/${id}/messages`);
+    if(!r.items.length) showWelcome();
+    r.items.forEach((m,i) => m.role==='user' ? addUser(m.content) : renderStoredBot(m, i===r.items.length-1));
+    scrollBottom(true);
+  }catch(e){
+    if(e.status===404){ alert('该会话不存在或已被删除。'); await loadSessions(); newSession(); }
+    else $('inner').innerHTML = `<div class="err">${esc(e.message)}</div>`;
+  }
+}
+
+async function newSession(){
+  if(streaming) stopStreaming();
+  if(current && current.message_count===0){ showWelcome(); return; } // C3：当前已是空会话
+  const s = await api('/api/sessions', {method:'POST'});
+  sessions.unshift(s); current = s; renderSessions(); setHeader(s); closeDrawer(); showWelcome();
+}
+$('newBtn').onclick = () => newSession().catch(e => alert(e.message));
+
+let pendingDelete = null;
+function confirmDelete(id){ pendingDelete = id; $('modal').style.display='flex'; }
+$('mCancel').onclick = () => { $('modal').style.display='none'; };
+$('mOk').onclick = async () => {
+  $('modal').style.display='none';
+  const id = pendingDelete;
+  try{
+    if(streaming && current && current.session_id===id) stopStreaming();
+    await api(`/api/sessions/${id}`, {method:'DELETE'});
+    sessions = sessions.filter(s => s.session_id!==id);
+    if(current && current.session_id===id){
+      current = null;
+      if(sessions.length) openSession(sessions[0].session_id); else { renderSessions(); setHeader(null); showWelcome(); }
+    } else renderSessions();
+  }catch(e){ alert(e.message); }
+};
+
+// ---------- 消息渲染 ----------
+function showWelcome(){
+  $('inner').innerHTML = `<div class="welcome"><h2>你好，我是 FinSage</h2><p>可以问我基金/理财产品资料、金融知识、公司公告、政策要点、风险提示和业务流程</p>
+    <div class="samples">${SAMPLES.map(([q,t]) => `<div data-q="${esc(q)}">${esc(q)}<span>${t}</span></div>`).join('')}</div></div>`;
+  $('inner').querySelectorAll('[data-q]').forEach(d => d.onclick = () => ask(d.dataset.q));
+}
+function addUser(text){
+  $('inner').querySelector('.welcome')?.remove();
+  $('inner').insertAdjacentHTML('beforeend', `<div class="msg-user">${esc(text)}</div>`);
+}
+function newBotCard(){
+  const card = document.createElement('div');
+  card.className = 'msg-bot';
+  card.innerHTML = '<div class="understood" style="display:none"></div><div class="stage"><span class="dot"></span><span class="stxt">正在理解问题…</span></div><div class="body"></div><div class="extra"></div><div class="actions"></div>';
+  $('inner').appendChild(card);
+  return card;
+}
+function citationsHtml(cites){
+  if(!cites || !cites.length) return '';
+  return `<div class="cites"><div class="h">引用来源（${cites.length}）</div>` + cites.map(c => {
+    const score = c.score!=null ? ` · 相关度 ${c.score.toFixed(2)}` : '';
+    if(c.source_type==='web'){
+      return `<details class="cite" data-idx="${c.index}"><summary><span class="no">[${c.index}]</span><span>${esc(c.title)}</span><span class="tag web">网络来源 · 仅供参考</span></summary>
+        <div class="cbody"><div class="meta">${esc(c.url)}${score}</div>${esc(c.snippet)}<br>${/^https?:/i.test(c.url)?`<a href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">打开网页 ↗</a>`:''}</div></details>`;
+    }
+    const meta = [c.product_name&&('产品：'+c.product_name), c.product_code&&('代码 '+c.product_code), c.entry_name&&('章节：'+c.entry_name)].filter(Boolean).map(esc).join(' · ');
+    return `<details class="cite" data-idx="${c.index}"><summary><span class="no">[${c.index}]</span><span>${esc(c.document_title)}</span><span class="tag">${esc(c.content_type_label||c.content_type)}</span>${c.publish_date?`<span class="tag">${esc(c.publish_date)}</span>`:''}</summary>
+      <div class="cbody"><div class="meta">${meta}${score}</div>“${esc(c.snippet)}…”<br><a href="/api/documents/${encodeURIComponent(c.doc_id)}/file" target="_blank" rel="noopener">查看原文 ↗</a></div></details>`;
+  }).join('') + '</div>';
+}
+function noticeHtml(app){
+  if(!app) return '';
+  return (app.risk_notice?`<div class="notice">⚠ ${esc(app.risk_notice)}</div>`:'') + (app.realtime_notice?`<div class="notice rt">ℹ ${esc(app.realtime_notice)}</div>`:'');
+}
+function actionsHtml(m, isLast){
+  const regen = isLast ? '<button data-act="regen">↻ 重新回答</button>' : '';
+  const copy = m.status!=='failed' && m.status!=='clarify' && m.content ? '<button data-act="copy">⧉ 复制</button>' : '';
+  const t = m.elapsed_ms ? `<span>用时 ${(m.elapsed_ms/1000).toFixed(1)}s</span>` : '';
+  return regen + copy + t;
+}
+function clarifyHtml(text, cands){
+  return `<p>${esc(text)}</p><div class="cand">` + cands.map(c =>
+    `<button data-doc="${esc(c.doc_id)}">${esc(c.title)}<br><small>${esc([c.content_type_label, c.publish_date].filter(Boolean).join(' · '))}</small></button>`).join('') +
+    `<button data-doc="">都不是，我重新描述</button></div>`;
+}
+function finishCard(card, m, isLast){
+  card.dataset.mid = m.message_id || '';
+  card.querySelector('.stage').style.display = 'none';
+  const body = card.querySelector('.body');
+  if(m.understood) { const u = card.querySelector('.understood'); u.textContent = '已理解为：' + m.understood; u.style.display = ''; }
+  if(m.status==='clarify'){
+    body.innerHTML = clarifyHtml(m.content, m.clarify_candidates||[]);
+  } else if(m.status==='failed'){
+    body.innerHTML = (m.content?renderMd(m.content):'') + `<div class="err">${esc(m.errorText || '回答生成失败，请重新回答。')}</div>`;
+  } else {
+    body.innerHTML = renderMd(m.content||'');
+    decorateRefs(body, m.citations);
+  }
+  card.querySelector('.extra').innerHTML = (m.status==='stopped' ? '<div class="stopped">⏹ 已停止生成</div>' : '') +
+    (m.status==='failed'||m.status==='stopped' ? '' : noticeHtml(m.appendix) + citationsHtml(m.citations));
+  card.querySelector('.actions').innerHTML = actionsHtml(m, isLast);
+  card._msg = m;
+}
+function renderStoredBot(m, isLast){
+  const card = newBotCard();
+  const userTexts = [...$('inner').querySelectorAll('.msg-user')];
+  const prevQ = userTexts.length ? userTexts[userTexts.length-1].textContent : '';
+  if(m.rewritten_query && m.rewritten_query !== prevQ && m.status!=='clarify') m.understood = m.rewritten_query;
+  finishCard(card, m, isLast);
+}
+
+// 卡片内点击：引用角标 / 候选 / 重新回答 / 复制
+$('inner').addEventListener('click', async e => {
+  const card = e.target.closest('.msg-bot'); if(!card) return;
+  const ref = e.target.closest('.ref');
+  if(ref){
+    const d = card.querySelector(`.cite[data-idx="${ref.dataset.ref}"]`);
+    if(d){ d.open = true; d.scrollIntoView({block:'nearest', behavior:'smooth'}); d.classList.add('flash'); setTimeout(()=>d.classList.remove('flash'), 1000); }
+    return;
+  }
+  const cand = e.target.closest('[data-doc]');
+  if(cand && !streaming){
+    if(!cand.dataset.doc){ $('ta').focus(); return; }
+    card.querySelectorAll('[data-doc]').forEach(b => b.disabled = true);
+    runChat({regenerate_message_id: card.dataset.mid, selected_doc_id: cand.dataset.doc}, card);
+    return;
+  }
+  const act = e.target.closest('[data-act]');
+  if(act?.dataset.act==='regen' && !streaming){ runChat({regenerate_message_id: card.dataset.mid}, card); }
+  if(act?.dataset.act==='copy'){
+    const m = card._msg; const text = [m.content, m.appendix?.risk_notice, m.appendix?.realtime_notice].filter(Boolean).join('\n\n');
+    try{ await navigator.clipboard.writeText(text); act.textContent='已复制'; setTimeout(()=>act.textContent='⧉ 复制', 1500); }catch(_){ alert('复制失败，请手动选择文字复制'); }
+  }
+});
+
+// ---------- 发送与流式（C1, C9, C12, C14） ----------
+const ta = $('ta'), sendBtn = $('send');
+ta.addEventListener('input', () => {
+  ta.style.height = '46px'; ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
+  $('counter').style.display = ta.value.length > 500 ? 'block' : 'none';
+  updateSend();
+});
+ta.addEventListener('keydown', e => { if(e.key==='Enter' && !e.shiftKey && !e.isComposing){ e.preventDefault(); if(!streaming) ask(ta.value); } });
+sendBtn.onclick = () => streaming ? stopStreaming() : ask(ta.value);
+function updateSend(){
+  if(streaming){ sendBtn.textContent='■ 停止'; sendBtn.className='send stop'; sendBtn.disabled=false; return; }
+  sendBtn.textContent='发送'; sendBtn.className='send';
+  const v = ta.value.trim(); sendBtn.disabled = !v || ta.value.length > 500;
+}
+
+function ask(text){
+  text = (text||'').trim();
+  if(!text || text.length>500 || streaming) return;
+  ta.value=''; ta.style.height='46px'; updateSend();
+  addUser(text); stick = true; scrollBottom(true);
+  runChat({query: text});
+}
+
+function stopStreaming(){ if(streaming){ streaming.stopped = true; streaming.ctrl.abort(); } }
+
+async function runChat(payload, replaceCard){
+  const card = replaceCard || newBotCard();
+  if(replaceCard){ // 重新回答：清空卡片，恢复生成中状态
+    card.querySelector('.stage').style.display=''; card.querySelector('.stxt').textContent='正在理解问题…';
+    card.querySelector('.body').innerHTML=''; card.querySelector('.extra').innerHTML=''; card.querySelector('.actions').innerHTML='';
+    card.querySelector('.understood').style.display='none';
+  }
+  // 之前的回答不再显示"重新回答"
+  $('inner').querySelectorAll('.msg-bot [data-act="regen"]').forEach(b => { if(!card.contains(b)) b.remove(); });
+
+  const ctrl = new AbortController();
+  streaming = {ctrl, stopped:false};
+  updateSend();
+  const m = {message_id:null, content:'', status:'completed', citations:[], appendix:null};
+  const userText = card.previousElementSibling?.classList.contains('msg-user') ? card.previousElementSibling.textContent : payload.query;
+  let raf = null;
+  const body = card.querySelector('.body');
+  const paint = () => { raf=null; body.innerHTML = renderMd(m.content) + '<span class="cursor"></span>'; scrollBottom(); };
+
+  try{
+    const res = await fetch('/api/chat/stream', {method:'POST', signal:ctrl.signal,
+      headers:{...H, 'Content-Type':'application/json'},
+      body:JSON.stringify({...payload, session_id: current?.session_id || null})});
+    if(!res.ok){ const b = await res.json().catch(()=>({})); throw Object.assign(new Error(b.message||`请求失败（${res.status}）`), {status:res.status}); }
+    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
+    while(true){
+      const {value, done} = await reader.read(); if(done) break;
+      buf += dec.decode(value, {stream:true});
+      let i;
+      while((i = buf.indexOf('\n\n')) >= 0){
+        const raw = buf.slice(0,i); buf = buf.slice(i+2);
+        let ev='message', data='';
+        raw.split('\n').forEach(l => { if(l.startsWith('event:')) ev=l.slice(6).trim(); else if(l.startsWith('data:')) data+=l.slice(5).trim(); });
+        handle(ev, data ? JSON.parse(data) : null);
+      }
+    }
+  }catch(e){
+    if(streaming?.stopped){ m.status='stopped'; }
+    else { m.status='failed'; m.errorText = e.status===404 ? '该会话不存在或已被删除。' : (e.message.includes('fetch') ? '网络连接中断，请检查网络后重试。' : e.message); }
+  }finally{
+    if(raf) cancelAnimationFrame(raf);
+    finishCard(card, m, true);
+    streaming = null; updateSend(); scrollBottom();
+    loadSessions().then(() => { current = sessions.find(s => s.session_id===current?.session_id) || current; setHeader(current); }).catch(()=>{});
+  }
+
+  function handle(ev, d){
+    switch(ev){
+      case 'start':
+        m.message_id = d.assistant_message_id;
+        if(!current || current.session_id!==d.session_id){ current = {session_id:d.session_id, title:(userText||'').slice(0,30), message_count:1, updated_at:new Date().toISOString()}; sessions.unshift(current); renderSessions(); setHeader(current); }
+        break;
+      case 'status': card.querySelector('.stxt').textContent = d.text; break;
+      case 'delta': m.content += d.text; if(!raf) raf = requestAnimationFrame(paint); break;
+      case 'replace': m.content = m.content.slice(0,d.start) + d.text + m.content.slice(d.end); if(!raf) raf = requestAnimationFrame(paint); break;
+      case 'clarify': m.status='clarify'; m.content=d.text; m.clarify_candidates=d.candidates; break;
+      case 'appendix': m.appendix = d; break;
+      case 'citations': m.citations = d; break;
+      case 'done':
+        if(m.status!=='clarify') m.status = d.status; m.elapsed_ms = d.elapsed_ms;
+        if(d.rewritten_query && d.rewritten_query!==userText && m.status!=='clarify') m.understood = d.rewritten_query;
+        if(d.entity && current){ current.locked_entity = d.entity; setHeader(current); }
+        break;
+      case 'error': m.status='failed'; m.errorText=d.message; break;
+    }
+  }
+}
+
+// ---------- 启动（C2） ----------
+(async () => {
+  try{
+    await loadSessions();
+    if(sessions.length) await openSession(sessions[0].session_id); else showWelcome();
+  }catch(e){ $('inner').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  updateSend(); ta.focus();
+})();
+</script>
+</body>
+</html>
