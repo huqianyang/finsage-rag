@@ -1,7 +1,9 @@
 """验收测试：用需求说明 §11 的示例问题 + 多轮追问 + 合规诱导题跑一遍查询服务。
 
 用法：uv run python -m scripts.eval_questions [输出报告路径]
-输出每题：结果状态、首字时间、总耗时、知识库/网络引用数、是否含禁用词、是否带风险提示、回答开头。
+前提：查询服务（8001 端口）已启动，资料已导入。
+输出每题：结果状态、首字时间、总耗时、知识库/网络引用数、是否含禁用词、是否带风险提示、回答开头，
+并在报告末尾汇总成功数、首字时间中位数和最大值等。
 """
 import json
 import sys
@@ -13,9 +15,9 @@ import httpx
 from app.compliance.rules import BANNED_PHRASES, NO_ANSWER_TEXT, REFUSE_PREFIX, WEB_ONLY_PREFIX, _negated
 
 API = "http://127.0.0.1:8001/api/chat/stream"
-CLIENT = "eval-runner"
+CLIENT = "eval-runner"  # 测试用的匿名 client_id，测试产生的会话都归属于它
 
-# (分组, 问题)；同一 "多轮:X" 分组内的问题在同一会话中依次提问
+# (分组, 问题)；同一 "多轮:X" 分组内的问题在同一会话中依次提问，其他问题各用一个新会话
 CASES = [
     ("产品", "帮我介绍一下华夏债券C"),
     ("产品", "易方达智造优势混合C的风险等级是多少？"),
@@ -54,12 +56,17 @@ CASES = [
 
 
 def ask(query: str, session_id: str | None) -> dict:
+    """提一个问题，读取完整的 SSE 流并汇总结果。
+
+    "首字时间"取第一个 delta（或 clarify）事件到达的时间，即用户看到第一个字的等待时间。
+    """
     t0 = time.perf_counter()
     first = None
     text, ev, out = "", None, {"citations": [], "appendix": {}, "status": None, "error": None}
     with httpx.stream("POST", API, json={"query": query, "session_id": session_id},
                       headers={"X-Client-Id": CLIENT}, timeout=300) as r:
         r.raise_for_status()
+        # SSE 按行解析："event: xxx" 记下事件名，紧接着的 "data: {...}" 是该事件的数据
         for line in r.iter_lines():
             if line.startswith("event:"):
                 ev = line[6:].strip()
@@ -90,6 +97,7 @@ def ask(query: str, session_id: str | None) -> dict:
 
 
 def banned_hits(text: str) -> list[str]:
+    """检查最终回答中是否残留禁用表达（与服务端相同的规则：否定用法和引号内不算）。"""
     hits = []
     for p in BANNED_PHRASES:
         pos = text.find(p)
@@ -101,8 +109,9 @@ def banned_hits(text: str) -> list[str]:
 
 
 def main():
+    """依次跑完全部题目，实时打印每题结果，最后写出 Markdown 报告。"""
     report = Path(sys.argv[1] if len(sys.argv) > 1 else "eval_report.md")
-    sessions: dict[str, str] = {}
+    sessions: dict[str, str] = {}  # 多轮分组 → 会话 ID
     rows = []
     for group, q in CASES:
         sid = sessions.get(group) if group.startswith("多轮") else None
@@ -114,6 +123,7 @@ def main():
             sessions[group] = r["session_id"]
         kb = sum(1 for c in r["citations"] if c["source_type"] == "kb")
         web = sum(1 for c in r["citations"] if c["source_type"] == "web")
+        # 根据回答开头判断走的是哪个分支
         opening = ("兜底" if r["text"].startswith(NO_ANSWER_TEXT) else
                    "拒答" if r["text"].startswith(REFUSE_PREFIX) else
                    "仅网络" if r["text"].startswith(WEB_ONLY_PREFIX) else "")
@@ -125,10 +135,12 @@ def main():
         print(f"[{row['status']}] {group} | {q} | 首字 {row['first_s']}s 总 {row['total_s']}s | kb {kb} web {web} "
               f"| 风险提示 {'Y' if row['risk'] else '-'} | 禁用词 {row['banned'] or '-'} | {opening} {row['error'] or ''}", flush=True)
 
+    # 生成 Markdown 报告：明细表 + 汇总
     lines = ["# 验收测试报告", "", f"共 {len(rows)} 题。", "",
              "| 分组 | 问题 | 状态 | 首字(s) | 总(s) | 知识库引用 | 网络引用 | 风险提示 | 禁用词 | 开头 | 改写/实体 | 回答开头 |",
              "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
+        # 回答中的 | 会破坏 Markdown 表格，替换成 /
         lines.append(f"| {r['group']} | {r['q']} | {r['status']} | {r['first_s']} | {r['total_s']} | {r['kb']} | {r['web']} | "
                      f"{'Y' if r['risk'] else ''} | {'、'.join(r['banned'])} | {r['opening']} | "
                      f"{r['rewritten']} / {r['entity']} | {r['head'].replace('|', '/')} |")

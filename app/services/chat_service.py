@@ -1,4 +1,17 @@
-"""问答服务：组织一次提问的完整生命周期，并把查询图的事件转成 SSE（API 设计 §2.1）。"""
+"""问答服务：组织一次提问的完整生命周期，并把查询流程图的事件转成 SSE（API 设计 §2.1）。
+
+一次提问分三个阶段：
+1. prepare()        同步校验参数、确定会话、写入用户消息（出错时直接返回普通 HTTP 错误）
+2. run_stream()     运行查询流程图，把节点推送的事件转成 SSE 文本逐条产出
+3. _save()          流程结束（完成 / 停止 / 失败）后保存助手消息并更新会话
+
+stream_response() 把 run_stream() 放到独立线程中执行，用于支持"停止生成"。
+
+SSE（Server-Sent Events）格式：每条事件是
+    event: 事件名
+    data: JSON 数据
+    （空行）
+"""
 import json
 import logging
 import queue
@@ -21,12 +34,23 @@ logger = logging.getLogger(__name__)
 
 
 def sse(event: str, data) -> str:
+    """把一个事件格式化为 SSE 文本。ensure_ascii=False 保留中文；default=str 让 datetime 等也能序列化。"""
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
 
 
 def prepare(client_id: str, query: str | None, session_id: str | None, selected_doc_id: str | None,
             regenerate_message_id: str | None) -> dict:
-    """同步校验并写入用户消息；出错时抛 AppError（在建立 SSE 之前返回普通 HTTP 错误）。"""
+    """同步校验并写入用户消息；出错时抛 AppError（在建立 SSE 之前返回普通 HTTP 错误）。
+
+    三种请求：
+    - 新问题：传 query，写入一条新的用户消息；
+    - 重新回答：传 regenerate_message_id，删除原回答，用对应的原问题重新生成（不新增用户消息）；
+    - 澄清后选择资料：同时传 regenerate_message_id（澄清消息）和 selected_doc_id。
+
+    Returns:
+        本次提问的上下文 ctx，供 run_stream 使用
+    """
+    # 没有会话 ID 时自动新建会话（首次提问）
     if session_id:
         session = session_service.get_owned(client_id, session_id)
     else:
@@ -41,6 +65,7 @@ def prepare(client_id: str, query: str | None, session_id: str | None, selected_
         user_msg = mongo.messages().find_one({"_id": old["reply_to"]})
         if not user_msg:
             raise NotFoundError("原问题不存在")
+        # 删除旧回答；新回答生成后会以新的消息 ID 保存
         mongo.messages().delete_one({"_id": regenerate_message_id})
         mongo.sessions().update_one({"_id": session["_id"]}, {"$inc": {"message_count": -1}})
         query = user_msg["content"]
@@ -55,6 +80,7 @@ def prepare(client_id: str, query: str | None, session_id: str | None, selected_
         mongo.messages().insert_one({"_id": user_message_id, "session_id": session["_id"], "role": "user",
                                      "content": query, "status": "completed", "created_at": now()})
         updates = {"$inc": {"message_count": 1}, "$set": {"updated_at": now()}}
+        # 会话的第一个问题：用问题前 30 字作为会话标题
         if session.get("message_count", 0) == 0 or session.get("title") == session_service.DEFAULT_TITLE:
             updates["$set"]["title"] = query[:30]
         mongo.sessions().update_one({"_id": session["_id"]}, updates)
@@ -68,11 +94,16 @@ async def stream_response(ctx: dict) -> AsyncIterator[str]:
 
     客户端断开（停止生成）时设置 stop 标志，生成线程在下一个事件处主动结束、
     关闭大模型流并保存已生成内容（status=stopped）。
+
+    为什么不直接把 run_stream 交给 StreamingResponse：同步生成器在客户端断开后
+    只是不再被读取，既不会结束也不会执行保存逻辑，大模型还会继续生成、消耗 token
+    （补测时发现的问题）。拆成"生产线程 + 队列 + 异步消费者"后，断开时可以可靠地通知生产线程。
     """
     q: queue.Queue = queue.Queue()
     stop = threading.Event()
 
     def work():
+        """生产者：在独立线程中跑问答流程，把每条 SSE 放进队列；结束时放入 None 作为结束标记。"""
         try:
             for chunk in run_stream(ctx, stop):
                 q.put(chunk)
@@ -82,18 +113,26 @@ async def stream_response(ctx: dict) -> AsyncIterator[str]:
     threading.Thread(target=work, daemon=True, name="chat-stream").start()
     try:
         while True:
+            # 在工作线程中阻塞等待队列；abandon_on_cancel=True：客户端断开时不必等 q.get 返回即可退出
             chunk = await anyio.to_thread.run_sync(q.get, abandon_on_cancel=True)
             if chunk is None:
                 break
             yield chunk
     finally:
+        # 正常结束或客户端断开都会走到这里；对于后者，通知生产线程停止
         stop.set()
 
 
 def run_stream(ctx: dict, stop: threading.Event | None = None) -> Iterator[str]:
+    """运行查询流程图，逐条产出 SSE 文本；无论结果如何，结束时都会保存助手消息。
+
+    事件顺序：start → status… → (clarify | delta/replace…) → appendix → citations → done
+    出错时以 error 事件结束。stop 被设置时立即停止，不再发送后续事件。
+    """
     session, s = ctx["session"], get_settings()
     stop = stop or threading.Event()
     t0 = time.perf_counter()
+    # 第一个事件：告诉前端会话 ID（新会话时前端据此更新会话列表）和本次消息 ID
     yield sse("start", {"session_id": session["_id"], "user_message_id": ctx["user_message_id"],
                         "assistant_message_id": ctx["assistant_message_id"]})
 
@@ -103,10 +142,11 @@ def run_stream(ctx: dict, stop: threading.Event | None = None) -> Iterator[str]:
         "locked_entity": session.get("locked_entity"),
         "selected_doc_id": ctx["selected_doc_id"],
     }
-    final: dict = {}
-    partial = ""
-    status = "failed"
+    final: dict = {}  # 流程最终状态
+    partial = ""  # 已发送给前端的回答文字（停止或出错时作为已生成内容保存）
+    status = "failed"  # 默认失败，正常走完才改成实际结果
     try:
+        # stream_mode 同时订阅两种输出：custom = 节点主动推送的事件；values = 每步之后的完整状态
         stream = build_query_graph().stream(state_in, stream_mode=["custom", "values"])
         try:
             for mode, payload in stream:
@@ -116,6 +156,7 @@ def run_stream(ctx: dict, stop: threading.Event | None = None) -> Iterator[str]:
                     final = payload
                     continue
                 event, data = payload
+                # 同步维护一份前端看到的文字，供停止时保存
                 if event == "delta":
                     partial += data["text"]
                 elif event == "replace":
@@ -129,6 +170,7 @@ def run_stream(ctx: dict, stop: threading.Event | None = None) -> Iterator[str]:
 
         status = final.get("outcome", "completed")
         appendix = final.get("appendix") or {}
+        # 澄清时没有提示和引用
         if status != "clarify":
             yield sse("appendix", {"risk_notice": appendix.get("risk_notice"),
                                    "realtime_notice": appendix.get("realtime_notice")})
@@ -137,7 +179,7 @@ def run_stream(ctx: dict, stop: threading.Event | None = None) -> Iterator[str]:
         yield sse("done", {"status": status, "elapsed_ms": elapsed,
                            "rewritten_query": final.get("rewritten_query"),
                            "entity": final.get("entity") or session.get("locked_entity")})
-    except GeneratorExit:  # 客户端断开 = 停止生成
+    except GeneratorExit:  # 客户端断开 = 停止生成（直接迭代本生成器的场景）
         status = "stopped"
         raise
     except APITimeoutError as e:
@@ -145,6 +187,7 @@ def run_stream(ctx: dict, stop: threading.Event | None = None) -> Iterator[str]:
         yield sse("error", {"code": "LLM_TIMEOUT", "message": "回答生成失败：模型服务响应超时，请稍后重试。"})
     except Exception as e:
         logger.exception("问答失败")
+        # 异常来自 openai 包 → 判定为大模型错误；否则多半是检索（Milvus / 本地模型）出错
         code = "LLM_ERROR" if "openai" in type(e).__module__ else "RETRIEVAL_ERROR"
         msg = "回答生成失败：模型服务暂时不可用，请稍后重试。" if code == "LLM_ERROR" else "资料检索失败，请稍后重试。"
         yield sse("error", {"code": code, "message": msg})
@@ -153,6 +196,13 @@ def run_stream(ctx: dict, stop: threading.Event | None = None) -> Iterator[str]:
 
 
 def _save(ctx: dict, final: dict, status: str, partial: str, elapsed: int) -> None:
+    """保存助手消息并更新会话（消息数、更新时间、锁定实体）。
+
+    - 正常结束：保存最终回答、引用、附加提示；
+    - 停止或失败：只保存已生成的部分文字，不保存引用和提示；
+    - trace 记录各路检索命中、重排分数和各阶段耗时，便于事后排查（不返回给前端）。
+    保存失败只记日志，不影响已经发给用户的回答。
+    """
     session = ctx["session"]
     content = final.get("answer") if status not in ("stopped", "failed") else partial
     if status == "failed" and not content:
@@ -177,6 +227,7 @@ def _save(ctx: dict, final: dict, status: str, partial: str, elapsed: int) -> No
     try:
         mongo.messages().insert_one(doc)
         updates: dict = {"$inc": {"message_count": 1}, "$set": {"updated_at": now()}}
+        # 本轮锁定了实体就更新到会话上，下一轮追问"它…"时作为参考
         if final.get("entity"):
             updates["$set"]["locked_entity"] = final["entity"]
         mongo.sessions().update_one({"_id": session["_id"]}, updates)

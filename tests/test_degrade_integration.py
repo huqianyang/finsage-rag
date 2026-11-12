@@ -2,6 +2,7 @@
 
 需要真实的 Milvus 与本地模型、已导入首批资料；用 monkeypatch 模拟外部服务故障。
 运行：uv run pytest -m integration -q
+（默认的 pytest 只跑单元测试，见 pyproject.toml 中的 addopts）
 """
 import json
 
@@ -13,10 +14,12 @@ from app.infra import llm, local_models, web_search
 from app.pipeline.querying import nodes
 from app.pipeline.querying.graph import build_query_graph
 
+# 给本文件所有测试打上 integration 标记
 pytestmark = pytest.mark.integration
 
 
 def run(query: str, history=None) -> dict:
+    """直接运行查询流程图（不经过 HTTP 和数据库），返回最终状态；节点推送的事件名放在 _events 中。"""
     final, events = {}, []
     for mode, payload in build_query_graph().stream(
             {"query": query, "history": history or [], "locked_entity": None, "selected_doc_id": None},
@@ -30,6 +33,7 @@ def run(query: str, history=None) -> dict:
 
 
 def test_web_search_down_still_answers_from_kb(monkeypatch):
+    """联网搜索不可用：照常用知识库回答，引用全部来自知识库。"""
     async def boom(*a, **k):
         raise ConnectionError("模拟联网搜索不可用")
     monkeypatch.setattr(web_search, "_call", boom)
@@ -40,6 +44,7 @@ def test_web_search_down_still_answers_from_kb(monkeypatch):
 
 
 def test_reranker_down_falls_back_to_rrf(monkeypatch):
+    """重排模型不可用：实体确认不锁定、重排按 RRF 顺序，问答仍能完成并给出引用。"""
     def boom(*a, **k):
         raise RuntimeError("模拟重排模型不可用")
     monkeypatch.setattr(local_models, "rerank", boom)
@@ -49,6 +54,7 @@ def test_reranker_down_falls_back_to_rrf(monkeypatch):
 
 
 def test_no_kb_and_no_web_returns_fixed_text(monkeypatch):
+    """知识库无相关资料且联网无结果：回答恰好是规定的兜底话术，没有引用。"""
     monkeypatch.setattr(web_search, "search", lambda q: [])
     r = run("某某银行信用卡年费怎么收？")
     assert r["outcome"] == "no_answer"
@@ -57,11 +63,13 @@ def test_no_kb_and_no_web_returns_fixed_text(monkeypatch):
 
 
 def test_stop_saves_partial_answer(monkeypatch):
+    """停止生成：收到第一段文字后设置停止标志，应以 stopped 状态保存已生成部分，且不再发送 done 事件。"""
     import threading
 
     from app.services import chat_service
 
     saved = {}
+    # 替换掉保存函数，只记录它收到的参数，不写数据库
     monkeypatch.setattr(chat_service, "_save", lambda ctx, final, status, partial, elapsed: saved.update(
         status=status, partial=partial))
     monkeypatch.setattr(chat_service.session_service, "recent_history", lambda *a, **k: [])
@@ -79,6 +87,7 @@ def test_stop_saves_partial_answer(monkeypatch):
 
 
 def test_llm_down_returns_error_event(monkeypatch):
+    """大模型不可用：流以 error 事件结束，错误码为 LLM_ERROR，提示用户稍后重试。"""
     from app.services import chat_service
 
     def boom(*a, **k):

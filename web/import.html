@@ -1,10 +1,15 @@
 <!doctype html>
+<!-- FinSage 资料导入页（导入服务 :8000 托管，地址 http://127.0.0.1:8000/） -->
+<!-- 三块内容：① 选择资料类型并上传文件 ② 导入进度（每 2 秒轮询） ③ 已导入资料列表 -->
+<!-- 原生 HTML + JS，无构建步骤；接口见 API 设计文档 §1 -->
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FinSage 资料导入</title>
+<!-- 样式：颜色变量定义在 :root 中；宽度 < 768px 时进度格子改为每行 3 个 -->
 <style>
+  /* 颜色变量：主色深蓝；ok=完成(绿) err=失败(红) run=进行中(橙) */
   :root{--bg:#f5f7fa;--panel:#fff;--ink:#1f2937;--muted:#6b7280;--line:#e5e7eb;--brand:#1e3a8a;--brand-soft:#e8eefc;--ok:#047857;--ok-soft:#ecfdf5;--err:#b91c1c;--err-soft:#fef2f2;--run:#b45309;--run-soft:#fffbeb}
   *{box-sizing:border-box}
   body{margin:0;font:14px/1.6 -apple-system,"Microsoft YaHei","PingFang SC",sans-serif;color:var(--ink);background:var(--bg)}
@@ -19,6 +24,7 @@
   select,input[type=text]{border:1px solid var(--line);border-radius:8px;padding:7px 10px;font:inherit;background:#fff}
   select.invalid{border-color:var(--err)}
   .hint{font-size:12px;color:var(--muted)}
+  /* 拖拽上传区域；.over 为文件拖到上方时的高亮状态 */
   .drop{margin-top:12px;border:2px dashed #c7d2fe;background:var(--brand-soft);border-radius:12px;padding:28px;text-align:center;color:var(--brand);cursor:pointer}
   .drop.over{background:#dbe4fb}
   .drop small{display:block;color:var(--muted);margin-top:4px}
@@ -32,6 +38,7 @@
   .task .hd{display:flex;justify-content:space-between;gap:8px;margin-bottom:8px;word-break:break-all}
   .badge{font-size:12px;border-radius:999px;padding:1px 10px;white-space:nowrap}
   .b-run{background:var(--run-soft);color:var(--run)}.b-ok{background:var(--ok-soft);color:var(--ok)}.b-err{background:var(--err-soft);color:var(--err)}.b-wait{background:#f3f4f6;color:var(--muted)}
+  /* 导入进度：6 个步骤格子，状态类名与后端步骤状态一致（done/running/failed/skipped） */
   .steps{display:grid;grid-template-columns:repeat(6,1fr);gap:6px}
   .st{font-size:12px;text-align:center;border-radius:6px;padding:6px 4px;background:#f3f4f6;color:var(--muted)}
   .st.done{background:var(--ok-soft);color:var(--ok)}
@@ -54,11 +61,14 @@
 </style>
 </head>
 <body>
+<!-- 顶部：标题和跳转到问答页的链接（链接地址由脚本按当前主机名拼成 :8001） -->
 <header><b>FinSage · 资料导入</b><a id="chatLink" href="#">前往问答页 →</a></header>
+<!-- 顶部浮动提示条，用于显示错误等短消息，2.5 秒后自动隐藏 -->
 <div class="toast" id="toast"></div>
 <div class="wrap">
 
   <section class="card">
+    <!-- ① 上传区：资料类型必选；选中的文件列在下方，不合格的标红且不会提交 -->
     <h3>① 上传资料</h3>
     <div class="row">
       <label for="ctype">资料类型 <span style="color:#b91c1c">*</span></label>
@@ -72,11 +82,13 @@
   </section>
 
   <section class="card">
+    <!-- ② 进度区：每个任务一张卡片，由 track() 轮询更新 -->
     <h3>② 导入进度 <small>每 2 秒自动刷新；离开页面不影响后台导入</small></h3>
     <div id="tasks"><div class="empty">暂无导入任务</div></div>
   </section>
 
   <section class="card">
+    <!-- ③ 资料列表：支持按类型筛选、按文件名搜索、分页 -->
     <h3>③ 已导入资料</h3>
     <div class="row" style="margin-bottom:10px">
       <select id="filterType"><option value="">全部类型</option></select>
@@ -90,17 +102,27 @@
 </div>
 
 <script>
+// ==================== 常量与全局状态 ====================
+// 前端先做一遍大小和格式校验（与后端规则一致），不合格的文件不提交，减少无效上传
 const MAX_MB = 50, EXTS = ['pdf','doc','docx','md'], SIZE = 20;
+// 步骤编码 → 中文名称（与后端 progress.STEPS 一致）
 const STEP_LABELS = {parse:'解析文档',image:'处理图片',split:'切分文档',metadata:'抽取元数据',embed:'生成向量',index:'写入向量库'};
+// 简写：按 id 取元素
 const $ = id => document.getElementById(id);
+// HTML 转义：所有来自接口的文本插入页面前都要转义，防止 XSS
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// picked：已选文件 [{file, error}]；docNames：已导入的文件名（用于提示"将覆盖"）
+// page：资料列表当前页；typeLabels：资料类型 code → 中文名
 let picked = [], docNames = new Set(), page = 1, typeLabels = {};
 const polling = new Map(); // task_id -> timer
 
+// 问答页在 8001 端口：用当前主机名拼接，局域网访问时也能正确跳转
 $('chatLink').href = `${location.protocol}//${location.hostname}:8001/`;
 
+// 显示一条提示，2.5 秒后自动隐藏（重复调用会重新计时）
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.style.display='block'; clearTimeout(t._h); t._h=setTimeout(()=>t.style.display='none',2500); }
 
+// 请求封装：网络失败或 HTTP 非 2xx 时抛出带中文提示的 Error（优先用后端返回的 message）
 async function api(url, opts){
   let res;
   try { res = await fetch(url, opts); } catch(e){ throw new Error('无法连接导入服务，请确认服务已启动'); }
@@ -110,6 +132,7 @@ async function api(url, opts){
 }
 
 // ---------- 资料类型 ----------
+// 加载资料类型，同时填充上传区和资料列表筛选框两个下拉框
 async function loadTypes(){
   const list = await api('/api/content-types');
   for(const t of list){
@@ -120,6 +143,7 @@ async function loadTypes(){
 }
 
 // ---------- 选文件 ----------
+// 添加选中的文件：逐个校验格式、大小、空文件，同名文件不重复添加
 function addFiles(files){
   for(const f of files){
     const ext = f.name.split('.').pop().toLowerCase();
@@ -132,6 +156,7 @@ function addFiles(files){
   }
   renderPicked();
 }
+// 渲染已选文件列表；与已导入资料同名的显示"将覆盖"提示
 function renderPicked(){
   $('picked').innerHTML = picked.map((p,i) => {
     const kb = (p.file.size/1024).toFixed(0)+' KB';
@@ -140,20 +165,27 @@ function renderPicked(){
   }).join('');
   updateStartBtn();
 }
+// "开始导入"按钮：有合格文件且已选资料类型时才可用（交互规则 I1）
 function updateStartBtn(){
   const n = picked.filter(p=>!p.error).length;
   $('startBtn').textContent = n ? `开始导入（${n} 个文件）` : '开始导入';
   $('startBtn').disabled = !n || !$('ctype').value;
 }
+// 点击 ✕ 移除某个已选文件（事件委托）
 $('picked').onclick = e => { if(e.target.classList.contains('x')){ picked.splice(+e.target.dataset.i,1); renderPicked(); } };
+// 点击上传区 = 打开系统文件选择框
 $('drop').onclick = () => $('fileInput').click();
+// 选完后清空 input 的值，这样再次选择同一个文件也能触发 change
 $('fileInput').onchange = e => { addFiles(e.target.files); e.target.value=''; };
+// 拖拽上传：dragover 必须 preventDefault，浏览器才允许放下文件
 $('drop').ondragover = e => { e.preventDefault(); $('drop').classList.add('over'); };
 $('drop').ondragleave = () => $('drop').classList.remove('over');
 $('drop').ondrop = e => { e.preventDefault(); $('drop').classList.remove('over'); addFiles(e.dataTransfer.files); };
 $('ctype').onchange = () => { $('ctype').classList.remove('invalid'); updateStartBtn(); };
 
 // ---------- 上传 ----------
+// ==================== 上传 ====================
+// 所有合格文件放进一个 FormData 一次提交；成功受理的开始轮询进度，被拒绝的弹出原因
 $('startBtn').onclick = async () => {
   if(!$('ctype').value){ $('ctype').classList.add('invalid'); toast('请选择资料类型'); return; }
   const valid = picked.filter(p=>!p.error);
@@ -171,6 +203,8 @@ $('startBtn').onclick = async () => {
 };
 
 // ---------- 进度 ----------
+// ==================== 导入进度 ====================
+// 生成任务卡片 HTML：状态徽标 + 6 个步骤格子 + 失败原因
 function taskCard(t){
   let badge;
   if(t.status==='completed'){
@@ -187,7 +221,9 @@ function taskCard(t){
   const err = t.error ? `<div class="errmsg">${esc(t.error.message)}。请检查文件后重新上传。</div>` : '';
   return `<div class="task" id="t_${t.task_id}"><div class="hd"><span>${esc(t.file_name)}</span>${badge}</div><div class="steps">${steps}</div>${err}</div>`;
 }
+// 秒数格式化为"x分y秒"
 function fmtDur(s){ return s>=60 ? `${Math.floor(s/60)}分${s%60}秒` : `${s}秒`; }
+// 更新已有卡片或在顶部新增卡片
 function upsertTask(t){
   const box = $('tasks');
   box.querySelector('.empty')?.remove();
@@ -195,6 +231,7 @@ function upsertTask(t){
   const html = taskCard(t);
   if(old) old.outerHTML = html; else box.insertAdjacentHTML('afterbegin', html);
 }
+// 开始轮询某个任务：立即查一次，之后每 2 秒一次；完成或失败后停止轮询并刷新资料列表
 function track(taskId){
   if(polling.has(taskId)) return;
   const tick = async () => {
@@ -207,11 +244,14 @@ function track(taskId){
   tick();
   polling.set(taskId, setInterval(tick, 2000));
 }
+// 页面打开时恢复进行中任务的显示（交互规则 I8）
 async function restoreTasks(){
   try{ const r = await api('/api/import-tasks?status=running'); r.items.reverse().forEach(t => track(t.task_id)); }catch(e){}
 }
 
 // ---------- 资料列表 ----------
+// ==================== 资料列表 ====================
+// 按当前筛选条件和页码加载资料列表
 async function loadDocs(){
   const q = new URLSearchParams({page, size:SIZE});
   if($('filterType').value) q.set('content_type', $('filterType').value);
@@ -233,12 +273,15 @@ async function loadDocs(){
     $('prev').disabled = page<=1; $('next').disabled = page>=pages;
   }catch(e){ $('docRows').innerHTML = `<tr><td colspan="8" class="empty">${esc(e.message)}</td></tr>`; }
 }
+// 时间格式化为本地时间"MM-DD HH:mm"（后端返回的是 UTC 时间）
 function fmtTime(s){ if(!s) return ''; const d=new Date(s); return `${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; }
 $('filterType').onchange = () => { page=1; loadDocs(); };
+// 搜索框防抖：停止输入 300ms 后才查询，避免每敲一个字都请求一次
 let kwTimer; $('keyword').oninput = () => { clearTimeout(kwTimer); kwTimer = setTimeout(()=>{ page=1; loadDocs(); }, 300); };
 $('prev').onclick = () => { page--; loadDocs(); };
 $('next').onclick = () => { page++; loadDocs(); };
 
+// 页面初始化：加载资料类型、恢复进行中的任务、加载资料列表
 loadTypes().catch(e=>toast(e.message)); restoreTasks(); loadDocs();
 </script>
 </body>

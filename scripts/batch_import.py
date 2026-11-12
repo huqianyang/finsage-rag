@@ -1,6 +1,10 @@
-"""批量导入：按目录对应资料类型，调用导入服务的上传接口并等待完成。
+"""批量导入：按子目录对应资料类型，调用导入服务的上传接口，并等待全部任务完成。
 
 用法：uv run python -m scripts.batch_import <数据根目录> [--only 子目录名]
+前提：导入服务（8000 端口）已启动。
+
+为什么用脚本而不是 curl：Windows 上 curl 发送的中文文件名是 GBK 编码，服务端会解析成乱码；
+httpx 按 UTF-8 发送文件名，和浏览器上传一致。
 """
 import argparse
 import sys
@@ -9,8 +13,8 @@ from pathlib import Path
 
 import httpx
 
-API = "http://127.0.0.1:8000"
-# 首批资料目录 → 资料类型（数据库设计 §1）
+API = "http://127.0.0.1:8000"  # 导入服务地址
+# 首批资料目录 → 资料类型（数据库设计 §1）；数据根目录下必须是这几个子目录
 DIR_TYPES = {
     "基金产品": "fund_product",
     "银行理财&风险揭示书": "risk_disclosure",
@@ -18,14 +22,16 @@ DIR_TYPES = {
     "宏观经济&政策资料": "macro_policy",
     "用户FAQ": "faq",
 }
-EXTS = {".pdf", ".doc", ".docx", ".md"}
+EXTS = {".pdf", ".doc", ".docx", ".md"}  # 只上传这些格式，其他文件忽略
 
 
 def upload(client: httpx.Client, files: list[Path], content_type: str) -> list[dict]:
+    """一次请求上传同一类型的多个文件，返回每个文件的受理结果。"""
     handles = [("files", (f.name, f.open("rb"))) for f in files]
     try:
         r = client.post(f"{API}/api/documents", data={"content_type": content_type}, files=handles, timeout=300)
     finally:
+        # 无论成功与否都关闭文件句柄
         for _, (_, fh) in handles:
             fh.close()
     r.raise_for_status()
@@ -33,6 +39,7 @@ def upload(client: httpx.Client, files: list[Path], content_type: str) -> list[d
 
 
 def wait(client: httpx.Client, tasks: dict[str, str]) -> dict[str, dict]:
+    """每 5 秒轮询一次所有未完成的任务，每完成一个打印一行结果（含各步骤说明），全部完成后返回。"""
     done: dict[str, dict] = {}
     while len(done) < len(tasks):
         for task_id, name in tasks.items():
@@ -49,12 +56,13 @@ def wait(client: httpx.Client, tasks: dict[str, str]) -> dict[str, dict]:
 
 
 def main():
+    """解析命令行参数，按目录依次上传，然后等待全部完成并汇总；有失败时退出码为 1。"""
     ap = argparse.ArgumentParser()
     ap.add_argument("root")
     ap.add_argument("--only", help="只导入某个子目录")
     args = ap.parse_args()
     root = Path(args.root)
-    tasks: dict[str, str] = {}
+    tasks: dict[str, str] = {}  # task_id → 文件名
     with httpx.Client() as client:
         for sub, ctype in DIR_TYPES.items():
             if args.only and args.only != sub:

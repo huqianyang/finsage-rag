@@ -1,11 +1,17 @@
 <!doctype html>
+<!-- FinSage 问答页（查询服务 :8001 托管，地址 http://127.0.0.1:8001/） -->
+<!-- 左侧会话列表，右侧对话区；回答通过 POST /api/chat/stream 以 SSE 流式接收 -->
+<!-- 原生 HTML + JS，无构建步骤；Markdown 渲染用 marked.js（CDN），交互规则见原型与交互设计文档 -->
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FinSage 智能金融知识库</title>
+<!-- marked：把回答中的 Markdown 渲染成 HTML；CDN 加载失败时退化为纯文本换行显示 -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<!-- 样式：颜色变量在 :root；宽度 < 768px 时会话列表收起为抽屉，点 ☰ 打开 -->
 <style>
+  /* 颜色变量：主色深蓝 brand；风险提示橙 warn；错误红 err；网络来源紫 web */
   :root{
     --bg:#f5f7fa; --panel:#fff; --ink:#1f2937; --muted:#6b7280; --line:#e5e7eb;
     --brand:#1e3a8a; --brand-soft:#e8eefc; --accent:#0f766e;
@@ -16,12 +22,14 @@
   *{box-sizing:border-box}
   html,body{height:100%}
   body{margin:0;font:14px/1.6 -apple-system,"Microsoft YaHei","PingFang SC",sans-serif;color:var(--ink);background:var(--bg)}
+  /* 整体布局：左侧会话栏 260px + 右侧主区域 */
   .app{display:grid;grid-template-columns:260px 1fr;height:100vh}
   aside{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
   .logo{padding:18px 16px 12px;font-weight:700;font-size:18px;color:var(--brand)}
   .logo small{display:block;font-weight:400;font-size:12px;color:var(--muted)}
   .new-btn{margin:0 16px 12px;padding:9px;border:1px dashed var(--brand);color:var(--brand);background:var(--brand-soft);border-radius:8px;cursor:pointer;font-weight:600;font:inherit}
   .sessions{flex:1;overflow:auto;padding:0 8px}
+  /* 会话列表项；删除按钮平时隐藏，悬停或选中时显示 */
   .sess{padding:9px 10px;border-radius:8px;cursor:pointer;display:flex;justify-content:space-between;gap:6px;align-items:center}
   .sess:hover{background:#f3f4f6}
   .sess.active{background:var(--brand-soft);color:var(--brand);font-weight:600}
@@ -33,20 +41,26 @@
   main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relative}
   .top{padding:12px 24px;border-bottom:1px solid var(--line);background:var(--panel);display:flex;justify-content:space-between;align-items:center;gap:10px}
   .top strong{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  /* 顶部"当前讨论"标签：多轮追问锁定的资料 */
   .entity{font-size:12px;background:#ecfdf5;color:var(--accent);border:1px solid #a7f3d0;border-radius:999px;padding:2px 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:50%}
   .chat{flex:1;overflow:auto;padding:24px}
   .inner{max-width:820px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+  /* 消息气泡：用户问题靠右，助手回答卡片靠左 */
   .msg-user{align-self:flex-end;background:var(--brand);color:#fff;padding:10px 14px;border-radius:14px 14px 2px 14px;max-width:75%;white-space:pre-wrap;word-break:break-word}
   .msg-bot{align-self:flex-start;background:var(--panel);border:1px solid var(--line);border-radius:2px 14px 14px 14px;padding:16px 18px;width:100%}
   .body{word-break:break-word}
   .body p{margin:6px 0}.body ul,.body ol{margin:4px 0;padding-left:22px}
   .body table{border-collapse:collapse;font-size:13px;margin:6px 0;display:block;overflow-x:auto}
   .body th,.body td{border:1px solid var(--line);padding:4px 8px}
+  /* 回答正文中的引用角标 [n]：知识库蓝色，网络来源紫色 */
   .ref{display:inline-block;font-size:11px;background:var(--brand-soft);color:var(--brand);border-radius:4px;padding:0 4px;margin:0 1px;cursor:pointer;vertical-align:1px;line-height:1.5}
   .ref.web{background:var(--web-soft);color:var(--web)}
+  /* "已理解为：…"灰色小字（多轮追问时显示改写后的问题） */
   .understood{font-size:12px;color:var(--muted);margin-bottom:6px}
+  /* 风险提示框（橙）与实时性提示框（.rt，蓝） */
   .notice{margin-top:12px;background:var(--warn-bg);border:1px solid var(--warn-line);color:var(--warn-ink);border-radius:8px;padding:8px 12px;font-size:13px}
   .notice.rt{background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8}
+  /* 引用来源卡片（可折叠展开），.flash 为点击角标后的短暂高亮 */
   .cites{margin-top:12px;border-top:1px dashed var(--line);padding-top:10px}
   .cites .h{font-size:12px;color:var(--muted);margin-bottom:6px}
   .cite{border:1px solid var(--line);border-radius:8px;margin-bottom:6px;font-size:13px;transition:background .3s}
@@ -62,10 +76,12 @@
   .actions{margin-top:10px;display:flex;gap:12px;font-size:12px;color:var(--muted);align-items:center}
   .actions button{border:0;background:none;color:var(--muted);cursor:pointer;padding:0;font:inherit}
   .actions button:hover{color:var(--brand)}
+  /* 生成中的阶段提示与闪烁圆点、光标动画 */
   .stage{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px;margin-bottom:6px}
   .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);animation:p 1s infinite}
   @keyframes p{50%{opacity:.3}}
   .cursor{display:inline-block;width:7px;height:15px;background:var(--ink);vertical-align:-2px;animation:p .8s infinite}
+  /* 实体澄清时的候选资料按钮 */
   .cand{display:flex;flex-direction:column;gap:6px;margin-top:8px}
   .cand button{text-align:left;border:1px solid var(--line);background:#fff;border-radius:8px;padding:8px 12px;cursor:pointer;font:inherit}
   .cand button:hover{border-color:var(--brand);background:var(--brand-soft)}
@@ -73,6 +89,7 @@
   .cand small{color:var(--muted)}
   .err{background:var(--err-bg);border:1px solid var(--err-line);color:var(--err-ink);border-radius:8px;padding:10px 12px}
   .stopped{font-size:12px;color:var(--muted);margin-top:6px}
+  /* 空会话时的欢迎语与示例问题 */
   .welcome{text-align:center;padding:40px 0 10px}
   .welcome h2{margin:0 0 6px;color:var(--brand)}
   .welcome p{color:var(--muted);margin:0 0 20px}
@@ -80,6 +97,7 @@
   .samples div{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer}
   .samples div:hover{border-color:var(--brand)}
   .samples span{display:block;font-size:12px;color:var(--muted)}
+  /* 底部输入区：输入框 + 发送/停止按钮 + 字数提示 + 免责声明 */
   .composer{border-top:1px solid var(--line);background:var(--panel);padding:12px 24px 10px}
   .box{max-width:820px;margin:0 auto;display:flex;gap:10px;align-items:flex-end}
   textarea{flex:1;resize:none;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font:inherit;height:46px;max-height:140px}
@@ -89,14 +107,17 @@
   .send.stop{background:#fff;color:var(--err-ink);border:1px solid var(--err-line)}
   .counter{max-width:820px;margin:4px auto 0;font-size:12px;color:var(--err-ink);display:none}
   .disclaimer{max-width:820px;margin:6px auto 0;font-size:11px;color:var(--muted);text-align:center}
+  /* 用户上翻查看历史时出现的"回到底部"按钮 */
   .to-bottom{position:absolute;right:24px;bottom:110px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:4px 12px;cursor:pointer;font-size:12px;color:var(--brand);display:none;box-shadow:0 2px 6px rgba(0,0,0,.08)}
   .menu-btn{display:none;border:0;background:none;font-size:20px;cursor:pointer}
   .mask{display:none}
+  /* 删除会话的确认弹窗 */
   .modal{position:fixed;inset:0;background:rgba(0,0,0,.35);display:none;align-items:center;justify-content:center;z-index:20;padding:16px}
   .modal .dlg{background:#fff;border-radius:12px;padding:18px 20px;max-width:360px;width:100%}
   .modal .ops{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}
   .modal button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 14px;cursor:pointer;font:inherit}
   .modal button.danger{background:var(--err-ink);color:#fff;border-color:var(--err-ink)}
+  /* 手机等窄屏：单栏布局，会话列表改为左侧滑出的抽屉 */
   @media (max-width:768px){
     .app{grid-template-columns:1fr}
     aside{position:fixed;inset:0 auto 0 0;width:260px;z-index:10;transform:translateX(-100%);transition:.2s}
@@ -111,14 +132,17 @@
 </head>
 <body>
 <div class="app">
+  <!-- 左侧：标志、新建会话按钮、会话列表（按今天/更早分组） -->
   <aside id="side">
     <div class="logo">FinSage 智能金融知识库<small>金融资料查询 · 不构成投资建议</small></div>
     <button class="new-btn" id="newBtn">＋ 新建会话</button>
     <div class="sessions" id="sessions"></div>
     <div class="side-foot">会话保存在本浏览器，清除浏览器数据后将无法找回</div>
   </aside>
+  <!-- 窄屏下打开抽屉时的半透明遮罩，点击关闭抽屉 -->
   <div class="mask" id="mask"></div>
   <main>
+    <!-- 顶部：会话标题 + 当前讨论的资料 -->
     <div class="top">
       <div style="display:flex;gap:10px;align-items:center;min-width:0">
         <button class="menu-btn" id="menuBtn" aria-label="会话列表">☰</button>
@@ -126,8 +150,10 @@
       </div>
       <span class="entity" id="entity" style="display:none" title="多轮追问将默认围绕该资料"></span>
     </div>
+    <!-- 对话区：消息由脚本动态插入 #inner -->
     <div class="chat" id="chat"><div class="inner" id="inner"></div></div>
     <button class="to-bottom" id="toBottom">↓ 回到底部</button>
+    <!-- 输入区 -->
     <div class="composer">
       <div class="box">
         <textarea id="ta" placeholder="输入你的金融问题，如：华夏债券C主要投资什么？（Enter 发送，Shift+Enter 换行）"></textarea>
@@ -138,19 +164,27 @@
     </div>
   </main>
 </div>
+<!-- 删除会话确认框（默认隐藏） -->
 <div class="modal" id="modal"><div class="dlg"><div>删除后无法恢复，确定删除该会话？</div><div class="ops"><button id="mCancel">取消</button><button class="danger" id="mOk">删除</button></div></div></div>
 
 <script>
+// ==================== 工具与常量 ====================
+// 简写：按 id 取元素
 const $ = id => document.getElementById(id);
+// HTML 转义：接口返回的文本插入页面前都要转义，防止 XSS
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// 欢迎页的 6 个示例问题（覆盖 6 类问题），点击即发送
 const SAMPLES = [
   ['帮我介绍一下华夏债券C','产品问答'],['什么是净值型理财？','金融知识'],
   ['招商银行一季度营收有什么变化？','公司公告'],['货币政策执行报告的核心内容是什么？','政策资讯'],
   ['理财产品一定赚钱吗？','风险提示'],['基金赎回多久到账？','业务流程'],
 ];
+// 后端流内错误码集合（当前代码中未使用，保留作参考）
 const STATUS_ERR = {LLM_TIMEOUT:1,LLM_ERROR:1,RETRIEVAL_ERROR:1};
 
 // ---------- 匿名身份 ----------
+// 匿名身份：首次访问生成 client_id 存到 localStorage，之后所有请求都放在 X-Client-Id 请求头里，
+// 后端据此区分不同浏览器的会话。localStorage 不可用（如隐私模式）时每次刷新会生成新 ID
 function getClientId(){
   let id = null;
   try{ id = localStorage.getItem('finsage_client_id'); }catch(e){}
@@ -163,8 +197,11 @@ function getClientId(){
 const CLIENT_ID = getClientId();
 const H = {'X-Client-Id': CLIENT_ID};
 
+// sessions：会话列表；current：当前打开的会话；
+// streaming：正在生成时为 {ctrl: 用于中止请求的 AbortController, stopped: 是否由用户主动停止}，否则为 null
 let sessions = [], current = null, streaming = null; // streaming: {ctrl, card, ...}
 
+// 请求封装：自动带上 X-Client-Id；204 返回 null；非 2xx 抛出带中文提示和 status 的 Error
 async function api(url, opts={}){
   let res;
   try{ res = await fetch(url, {...opts, headers:{...H, ...(opts.headers||{})}}); }
@@ -176,6 +213,10 @@ async function api(url, opts={}){
 }
 
 // ---------- Markdown 渲染（U3：先转义 < & 再交给 marked，链接只允许 http/https） ----------
+// Markdown → 安全的 HTML：
+// 1) 先把 & 和 < 转义，模型输出中的任何 HTML 标签都只会显示为文字；
+// 2) 链接只保留 http/https，并在新标签页打开；
+// 3) 兜底再删除 script、iframe 等危险元素
 function renderMd(text){
   const safe = text.replace(/&/g,'&amp;').replace(/</g,'&lt;');
   let html = window.marked ? marked.parse(safe, {gfm:true, breaks:true}) : safe.replace(/\n/g,'<br>');
@@ -187,6 +228,7 @@ function renderMd(text){
   tpl.content.querySelectorAll('script,iframe,object,embed,style').forEach(n => n.remove());
   return tpl.innerHTML;
 }
+// 把正文中的 [1] [2] 文本替换成可点击的角标（只处理文本节点，不会破坏已渲染的 HTML 结构）
 function decorateRefs(el, citations){
   const types = {}; (citations||[]).forEach(c => types[c.index] = c.source_type);
   const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
@@ -204,16 +246,21 @@ function decorateRefs(el, citations){
 }
 
 // ---------- 滚动（C8） ----------
+// ==================== 滚动（交互规则 C8） ====================
+// 用户停在底部时，新内容自动跟随滚动；用户向上翻看时不强制滚动，显示"回到底部"按钮
 const chatEl = $('chat');
 let stick = true;
 chatEl.addEventListener('scroll', () => {
   stick = chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight < 40;
   $('toBottom').style.display = stick ? 'none' : 'block';
 });
+// 滚动到底部：force=true 时无论用户位置都滚动
 function scrollBottom(force){ if(force || stick){ chatEl.scrollTop = chatEl.scrollHeight; } }
 $('toBottom').onclick = () => { stick = true; scrollBottom(true); };
 
 // ---------- 会话列表 ----------
+// ==================== 会话列表 ====================
+// 渲染会话列表，按更新时间分为"今天"和"更早"两组
 function renderSessions(){
   const today = new Date().toDateString();
   const groups = {'今天':[], '更早':[]};
@@ -223,18 +270,22 @@ function renderSessions(){
       `<div class="sess ${current && s.session_id===current.session_id?'active':''}" data-id="${s.session_id}"><span class="t">${esc(s.title)}</span><button class="del" data-del="${s.session_id}" title="删除会话">🗑</button></div>`
     ).join('')).join('');
 }
+// 从后端重新加载会话列表
 async function loadSessions(){ sessions = (await api('/api/sessions')).items; renderSessions(); }
 
+// 会话列表点击（事件委托）：点删除按钮弹确认框，点其他位置打开会话
 $('sessions').onclick = e => {
   const del = e.target.closest('[data-del]');
   if(del){ e.stopPropagation(); confirmDelete(del.dataset.del); return; }
   const item = e.target.closest('.sess');
   if(item) openSession(item.dataset.id);
 };
+// 窄屏：打开 / 关闭会话抽屉
 $('menuBtn').onclick = () => { $('side').classList.add('open'); $('mask').classList.add('open'); };
 $('mask').onclick = closeDrawer;
 function closeDrawer(){ $('side').classList.remove('open'); $('mask').classList.remove('open'); }
 
+// 更新顶部标题和"当前讨论"标签（没有锁定资料时隐藏标签）
 function setHeader(s){
   $('title').textContent = s ? s.title : '新会话';
   const ent = s && s.locked_entity;
@@ -242,6 +293,7 @@ function setHeader(s){
   if(ent) $('entity').textContent = '当前讨论：' + ent.label;
 }
 
+// 打开会话：如果正在生成先停止；加载并渲染全部历史消息；会话已不存在时提示并新建会话
 async function openSession(id){
   if(streaming) stopStreaming();
   current = sessions.find(s => s.session_id === id) || null;
@@ -258,6 +310,7 @@ async function openSession(id){
   }
 }
 
+// 新建会话；当前已经是空会话时不重复创建（交互规则 C3）
 async function newSession(){
   if(streaming) stopStreaming();
   if(current && current.message_count===0){ showWelcome(); return; } // C3：当前已是空会话
@@ -266,6 +319,7 @@ async function newSession(){
 }
 $('newBtn').onclick = () => newSession().catch(e => alert(e.message));
 
+// 删除会话：先弹确认框，确认后调用删除接口；删的是当前会话则自动切到下一个
 let pendingDelete = null;
 function confirmDelete(id){ pendingDelete = id; $('modal').style.display='flex'; }
 $('mCancel').onclick = () => { $('modal').style.display='none'; };
@@ -284,15 +338,19 @@ $('mOk').onclick = async () => {
 };
 
 // ---------- 消息渲染 ----------
+// ==================== 消息渲染 ====================
+// 欢迎页：问候语 + 示例问题
 function showWelcome(){
   $('inner').innerHTML = `<div class="welcome"><h2>你好，我是 FinSage</h2><p>可以问我基金/理财产品资料、金融知识、公司公告、政策要点、风险提示和业务流程</p>
     <div class="samples">${SAMPLES.map(([q,t]) => `<div data-q="${esc(q)}">${esc(q)}<span>${t}</span></div>`).join('')}</div></div>`;
   $('inner').querySelectorAll('[data-q]').forEach(d => d.onclick = () => ask(d.dataset.q));
 }
+// 追加一条用户消息气泡（同时移除欢迎页）
 function addUser(text){
   $('inner').querySelector('.welcome')?.remove();
   $('inner').insertAdjacentHTML('beforeend', `<div class="msg-user">${esc(text)}</div>`);
 }
+// 新建一张空的回答卡片，结构：已理解为 / 阶段提示 / 正文 / 附加（提示框+引用） / 操作栏
 function newBotCard(){
   const card = document.createElement('div');
   card.className = 'msg-bot';
@@ -300,6 +358,8 @@ function newBotCard(){
   $('inner').appendChild(card);
   return card;
 }
+// 引用来源卡片：知识库来源显示资料名、类型、发布时间、章节、片段和"查看原文"链接；
+// 网络来源显示标题、紫色"网络来源 · 仅供参考"标签和网页链接
 function citationsHtml(cites){
   if(!cites || !cites.length) return '';
   return `<div class="cites"><div class="h">引用来源（${cites.length}）</div>` + cites.map(c => {
@@ -313,21 +373,26 @@ function citationsHtml(cites){
       <div class="cbody"><div class="meta">${meta}${score}</div>“${esc(c.snippet)}…”<br><a href="/api/documents/${encodeURIComponent(c.doc_id)}/file" target="_blank" rel="noopener">查看原文 ↗</a></div></details>`;
   }).join('') + '</div>';
 }
+// 风险提示框和实时性提示框（对应后端 appendix 事件，值为 null 的不显示）
 function noticeHtml(app){
   if(!app) return '';
   return (app.risk_notice?`<div class="notice">⚠ ${esc(app.risk_notice)}</div>`:'') + (app.realtime_notice?`<div class="notice rt">ℹ ${esc(app.realtime_notice)}</div>`:'');
 }
+// 操作栏：只有最后一条回答显示"重新回答"；有正文才显示"复制"；显示用时
 function actionsHtml(m, isLast){
   const regen = isLast ? '<button data-act="regen">↻ 重新回答</button>' : '';
   const copy = m.status!=='failed' && m.status!=='clarify' && m.content ? '<button data-act="copy">⧉ 复制</button>' : '';
   const t = m.elapsed_ms ? `<span>用时 ${(m.elapsed_ms/1000).toFixed(1)}s</span>` : '';
   return regen + copy + t;
 }
+// 实体澄清：候选资料按钮 + "都不是，我重新描述"
 function clarifyHtml(text, cands){
   return `<p>${esc(text)}</p><div class="cand">` + cands.map(c =>
     `<button data-doc="${esc(c.doc_id)}">${esc(c.title)}<br><small>${esc([c.content_type_label, c.publish_date].filter(Boolean).join(' · '))}</small></button>`).join('') +
     `<button data-doc="">都不是，我重新描述</button></div>`;
 }
+// 把一条回答（流式结束后的结果或历史消息）完整渲染到卡片上：
+// 隐藏阶段提示 → 按状态渲染正文（澄清 / 失败 / 正常）→ 提示框与引用 → 操作栏
 function finishCard(card, m, isLast){
   card.dataset.mid = m.message_id || '';
   card.querySelector('.stage').style.display = 'none';
@@ -346,6 +411,7 @@ function finishCard(card, m, isLast){
   card.querySelector('.actions').innerHTML = actionsHtml(m, isLast);
   card._msg = m;
 }
+// 渲染一条历史回答；改写后的问题与原问题不同时显示"已理解为：…"
 function renderStoredBot(m, isLast){
   const card = newBotCard();
   const userTexts = [...$('inner').querySelectorAll('.msg-user')];
@@ -355,14 +421,18 @@ function renderStoredBot(m, isLast){
 }
 
 // 卡片内点击：引用角标 / 候选 / 重新回答 / 复制
+// 回答卡片内的点击统一在这里处理（事件委托），按点击目标分为四种情况：
 $('inner').addEventListener('click', async e => {
   const card = e.target.closest('.msg-bot'); if(!card) return;
   const ref = e.target.closest('.ref');
+  // 1) 点引用角标：展开对应的引用卡片、滚动到可见位置并高亮 1 秒
   if(ref){
     const d = card.querySelector(`.cite[data-idx="${ref.dataset.ref}"]`);
     if(d){ d.open = true; d.scrollIntoView({block:'nearest', behavior:'smooth'}); d.classList.add('flash'); setTimeout(()=>d.classList.remove('flash'), 1000); }
     return;
   }
+  // 2) 点澄清候选：带着选中的资料重新回答这条澄清消息（原卡片原地替换为答案，不新增用户气泡）；
+  //    点"都不是"则聚焦输入框
   const cand = e.target.closest('[data-doc]');
   if(cand && !streaming){
     if(!cand.dataset.doc){ $('ta').focus(); return; }
@@ -370,6 +440,7 @@ $('inner').addEventListener('click', async e => {
     runChat({regenerate_message_id: card.dataset.mid, selected_doc_id: cand.dataset.doc}, card);
     return;
   }
+  // 3) 重新回答：用同一个问题重新生成并替换该卡片；4) 复制：复制正文和提示语（不含引用卡片）
   const act = e.target.closest('[data-act]');
   if(act?.dataset.act==='regen' && !streaming){ runChat({regenerate_message_id: card.dataset.mid}, card); }
   if(act?.dataset.act==='copy'){
@@ -379,20 +450,26 @@ $('inner').addEventListener('click', async e => {
 });
 
 // ---------- 发送与流式（C1, C9, C12, C14） ----------
+// ==================== 发送与流式接收（交互规则 C1、C9、C12、C14） ====================
 const ta = $('ta'), sendBtn = $('send');
+// 输入框随内容自动增高（最高 140px），超过 500 字显示提示并禁用发送
 ta.addEventListener('input', () => {
   ta.style.height = '46px'; ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
   $('counter').style.display = ta.value.length > 500 ? 'block' : 'none';
   updateSend();
 });
+// Enter 发送、Shift+Enter 换行；isComposing 为真表示正在用输入法选字，此时的 Enter 不发送
 ta.addEventListener('keydown', e => { if(e.key==='Enter' && !e.shiftKey && !e.isComposing){ e.preventDefault(); if(!streaming) ask(ta.value); } });
+// 同一个按钮：生成中是"停止"，否则是"发送"
 sendBtn.onclick = () => streaming ? stopStreaming() : ask(ta.value);
+// 根据是否在生成中、输入是否有效，更新按钮文字、样式和可用状态
 function updateSend(){
   if(streaming){ sendBtn.textContent='■ 停止'; sendBtn.className='send stop'; sendBtn.disabled=false; return; }
   sendBtn.textContent='发送'; sendBtn.className='send';
   const v = ta.value.trim(); sendBtn.disabled = !v || ta.value.length > 500;
 }
 
+// 发送新问题：清空输入框、显示用户气泡、开始流式请求
 function ask(text){
   text = (text||'').trim();
   if(!text || text.length>500 || streaming) return;
@@ -401,8 +478,12 @@ function ask(text){
   runChat({query: text});
 }
 
+// 停止生成：中止 fetch 请求。服务端检测到连接断开后会停止生成，并把已生成部分保存为"已停止"
 function stopStreaming(){ if(streaming){ streaming.stopped = true; streaming.ctrl.abort(); } }
 
+// 发起一次流式问答并实时渲染。
+// payload：请求体（新问题传 query；重新回答 / 澄清选择传 regenerate_message_id 等）
+// replaceCard：重新回答时要复用的原卡片；新问题时为空，会新建一张卡片
 async function runChat(payload, replaceCard){
   const card = replaceCard || newBotCard();
   if(replaceCard){ // 重新回答：清空卡片，恢复生成中状态
@@ -413,20 +494,27 @@ async function runChat(payload, replaceCard){
   // 之前的回答不再显示"重新回答"
   $('inner').querySelectorAll('.msg-bot [data-act="regen"]').forEach(b => { if(!card.contains(b)) b.remove(); });
 
+  // AbortController：用于"停止生成"时中止 fetch
   const ctrl = new AbortController();
   streaming = {ctrl, stopped:false};
   updateSend();
+  // m：本次回答的累积状态，随事件不断更新，结束后交给 finishCard 渲染
   const m = {message_id:null, content:'', status:'completed', citations:[], appendix:null};
   const userText = card.previousElementSibling?.classList.contains('msg-user') ? card.previousElementSibling.textContent : payload.query;
+  // 渲染节流：delta 可能来得很频繁，用 requestAnimationFrame 合并成每帧最多重绘一次
   let raf = null;
   const body = card.querySelector('.body');
   const paint = () => { raf=null; body.innerHTML = renderMd(m.content) + '<span class="cursor"></span>'; scrollBottom(); };
 
   try{
+    // 浏览器原生 EventSource 只支持 GET，这里用 fetch + 读取响应流的方式接收 SSE，
+    // 好处是可以用 POST 发送 JSON 请求体，并能用 AbortController 中止
     const res = await fetch('/api/chat/stream', {method:'POST', signal:ctrl.signal,
       headers:{...H, 'Content-Type':'application/json'},
       body:JSON.stringify({...payload, session_id: current?.session_id || null})});
     if(!res.ok){ const b = await res.json().catch(()=>({})); throw Object.assign(new Error(b.message||`请求失败（${res.status}）`), {status:res.status}); }
+    // 逐块读取响应：一个网络块可能包含半条或多条事件，所以先拼进 buf，
+    // 再按空行（\n\n）切出完整事件，解析出 event 名和 data 后交给 handle()
     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
     while(true){
       const {value, done} = await reader.read(); if(done) break;
@@ -439,9 +527,11 @@ async function runChat(payload, replaceCard){
         handle(ev, data ? JSON.parse(data) : null);
       }
     }
+  // 出错：如果是用户点了停止导致的中止，记为"已停止"；否则记为失败并给出可读的原因
   }catch(e){
     if(streaming?.stopped){ m.status='stopped'; }
     else { m.status='failed'; m.errorText = e.status===404 ? '该会话不存在或已被删除。' : (e.message.includes('fetch') ? '网络连接中断，请检查网络后重试。' : e.message); }
+  // 无论成功、失败还是停止：渲染最终结果、恢复发送按钮、刷新会话列表（标题、锁定实体可能已更新）
   }finally{
     if(raf) cancelAnimationFrame(raf);
     finishCard(card, m, true);
@@ -449,29 +539,38 @@ async function runChat(payload, replaceCard){
     loadSessions().then(() => { current = sessions.find(s => s.session_id===current?.session_id) || current; setHeader(current); }).catch(()=>{});
   }
 
+  // 处理一条 SSE 事件（事件定义见 API 设计 §2.1）
   function handle(ev, d){
     switch(ev){
+      // start：拿到消息 ID；新会话时把它加到会话列表顶部
       case 'start':
         m.message_id = d.assistant_message_id;
         if(!current || current.session_id!==d.session_id){ current = {session_id:d.session_id, title:(userText||'').slice(0,30), message_count:1, updated_at:new Date().toISOString()}; sessions.unshift(current); renderSessions(); setHeader(current); }
         break;
+      // status：更新阶段提示，如"正在检索资料…"
       case 'status': card.querySelector('.stxt').textContent = d.text; break;
+      // delta：追加一段回答文字；replace：合规替换已显示的文字
       case 'delta': m.content += d.text; if(!raf) raf = requestAnimationFrame(paint); break;
       case 'replace': m.content = m.content.slice(0,d.start) + d.text + m.content.slice(d.end); if(!raf) raf = requestAnimationFrame(paint); break;
+      // clarify：需要用户选择资料；appendix：风险/实时性提示；citations：引用来源
       case 'clarify': m.status='clarify'; m.content=d.text; m.clarify_candidates=d.candidates; break;
       case 'appendix': m.appendix = d; break;
       case 'citations': m.citations = d; break;
+      // done：最终状态与耗时；改写后的问题与原问题不同时显示"已理解为"；更新"当前讨论"标签
       case 'done':
         if(m.status!=='clarify') m.status = d.status; m.elapsed_ms = d.elapsed_ms;
         if(d.rewritten_query && d.rewritten_query!==userText && m.status!=='clarify') m.understood = d.rewritten_query;
         if(d.entity && current){ current.locked_entity = d.entity; setHeader(current); }
         break;
+      // error：服务端在流中报告的错误（如模型超时），显示错误提示和"重新回答"
       case 'error': m.status='failed'; m.errorText=d.message; break;
     }
   }
 }
 
 // ---------- 启动（C2） ----------
+// ==================== 页面启动（交互规则 C2） ====================
+// 加载会话列表，自动打开最近一个会话；没有会话时显示欢迎页
 (async () => {
   try{
     await loadSessions();

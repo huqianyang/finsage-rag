@@ -1,7 +1,8 @@
-"""环境连通性检查：中间件、本地模型、云端模型、MinerU、联网搜索。
+"""环境连通性检查：中间件、本地模型、云端模型、MinerU、联网搜索，共 9 项。
 
-用法：uv run python -m scripts.check_env [--skip-mineru]
-只打印是否可用，不打印任何密钥。
+用法：uv run python -m scripts.check_env
+只打印每项是否可用，不打印任何密钥。全部通过时退出码为 0，否则为 1。
+部署到新环境或修改 .env 后，先跑一遍它再启动服务。
 """
 import sys
 import time
@@ -10,6 +11,7 @@ from app.config import get_settings
 
 
 def step(name, fn):
+    """执行一项检查并打印结果和耗时；返回是否通过。检查函数返回的字符串作为补充说明打印。"""
     t = time.time()
     try:
         msg = fn()
@@ -21,6 +23,7 @@ def step(name, fn):
 
 
 def check_mongo():
+    """MongoDB：能否连接（含鉴权），并创建业务索引。"""
     from app.infra import mongo
     mongo.ping()
     mongo.ensure_indexes()
@@ -28,13 +31,18 @@ def check_mongo():
 
 
 def check_minio():
+    """MinIO：能否连接，业务桶不存在则创建。"""
     from app.infra import object_store
     object_store.ensure_bucket()
     return f"桶 {get_settings().minio_bucket} 就绪"
 
 
 def check_milvus_analyzer():
-    """在临时集合上验证 BM25 + 中文分词器可用。"""
+    """在临时集合上验证 BM25 + 中文分词器可用。
+
+    BM25 全文检索和中文分词器是 Milvus 2.5 才有的功能，这里先用临时集合实测一遍：
+    写入两条中文文本，用"招商银行营收"检索，期望排第一的是招商银行那条。检查结束后删除临时集合。
+    """
     from pymilvus import DataType, MilvusClient
     from app.infra.vector_store import CHINESE_ANALYZER, _bm25_function, get_client
 
@@ -54,7 +62,7 @@ def check_milvus_analyzer():
     try:
         c.insert(name, [{"search_text": "华夏债券投资基金的风险等级为中低风险"},
                         {"search_text": "招商银行第一季度营业收入同比变化"}])
-        c.flush(name)
+        c.flush(name)  # 确保数据落盘后再检索
         c.load_collection(name)
         hits = c.search(name, data=["招商银行营收"], anns_field="sparse_vector", limit=2,
                         search_params={"metric_type": "BM25"}, output_fields=["search_text"])
@@ -66,6 +74,7 @@ def check_milvus_analyzer():
 
 
 def check_milvus_collections():
+    """Milvus：业务集合不存在则创建，已存在则检查向量维度是否与配置一致。"""
     from app.infra import vector_store
     vector_store.ensure_collections()
     s = get_settings()
@@ -73,6 +82,7 @@ def check_milvus_collections():
 
 
 def check_embedding():
+    """本地向量模型：能否加载，输出维度是否等于配置的 EMBEDDING_DIM。"""
     from app.infra.local_models import embed
     v = embed(["什么是净值型理财"])
     assert len(v[0]) == get_settings().embedding_dim, f"维度 {len(v[0])}"
@@ -80,6 +90,7 @@ def check_embedding():
 
 
 def check_reranker():
+    """本地重排模型：能否加载，相关句子的分数是否高于无关句子。"""
     from app.infra.local_models import rerank
     s = rerank("基金赎回多久到账", ["基金赎回款一般在T+1至T+7个交易日内到账", "贵州茅台一季度营收增长"])
     assert s[0] > s[1], s
@@ -87,16 +98,19 @@ def check_reranker():
 
 
 def check_llm():
+    """硅基流动大模型：API Key 是否有效、模型名是否正确。"""
     from app.infra.llm import chat
     return chat([{"role": "user", "content": "只回复两个字：你好"}], max_tokens=10).strip()
 
 
 def check_web_search():
+    """百炼联网搜索：未配置 Key 视为跳过（不算失败）；配置了则实际搜索一次。"""
     from app.infra import web_search
     if not get_settings().dashscope_api_key:
         return "未配置 DASHSCOPE_API_KEY，已跳过"
     pages = web_search.search("中国人民银行 货币政策执行报告")
     if not pages:
+        # search() 内部会吞掉异常并记录日志，所以这里只能提示去看日志
         raise RuntimeError("无结果，查看上方日志")
     return f"{len(pages)} 条，首条：{pages[0]['title']}"
 
@@ -121,5 +135,6 @@ if __name__ == "__main__":
               ("Milvus 集合", check_milvus_collections), ("本地向量模型", check_embedding),
               ("本地重排模型", check_reranker), ("硅基流动 LLM", check_llm), ("百炼联网搜索", check_web_search),
               ("MinerU", check_mineru)]
+    # 先用列表把每一项都执行完（all() 直接接生成器会在第一个失败时停止，后面的项就看不到结果了）
     ok = all([step(n, f) for n, f in checks])
     sys.exit(0 if ok else 1)
