@@ -14,8 +14,13 @@ data/
 temp/
 logs/
 
+# 内部设计文档（不公开）
+docs/
+
 # IDE / 同步盘临时文件
-.idea/workspace.xml
-.idea/**/*.baiduyun.uploading.cfg
+.idea/
 *.baiduyun.uploading.cfg
 .jbeval/
+
+# 验收测试输出
+eval_report.md

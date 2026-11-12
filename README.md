@@ -4,17 +4,6 @@
 
 > 定位为金融知识查询工具，不提供投资建议、不承诺收益。
 
-## 文档
-
-| 文档 | 内容 |
-| --- | --- |
-| [docs/01-PRD.md](docs/01-PRD.md) | 产品需求 |
-| [docs/02-架构设计.md](docs/02-架构设计.md) | 架构、技术选型、导入/查询流程、实现变更记录 |
-| [docs/03-数据库设计.md](docs/03-数据库设计.md) | Milvus / MongoDB / MinIO 设计 |
-| [docs/04-API接口设计.md](docs/04-API接口设计.md) | 接口与 SSE 事件协议 |
-| [docs/05-原型与交互设计.md](docs/05-原型与交互设计.md) | 原型（`docs/prototype/`）与交互规则 |
-| [docs/06-验收测试报告.md](docs/06-验收测试报告.md) | 示例问题验收结果（脚本自动生成） |
-
 ## 技术栈
 
 FastAPI · LangGraph · Milvus 2.5（稠密向量 + 内置中文 BM25）· MongoDB · MinIO · MinerU 云解析 ·
@@ -64,7 +53,7 @@ uv run python -m scripts.batch_import "<金融/数据 目录>"
 uv run pytest -q
 ```
 ```bash
-uv run python -m scripts.eval_questions docs/06-验收测试报告.md
+uv run python -m scripts.eval_questions eval_report.md
 ```
 
 ## 目录
@@ -82,5 +71,4 @@ app/
 web/          import.html  chat.html
 scripts/      check_env.py  batch_import.py  eval_questions.py
 tests/        单元测试
-docs/         设计文档与原型
 ```
