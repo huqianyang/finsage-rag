@@ -1,10 +1,13 @@
 """问答服务：组织一次提问的完整生命周期，并把查询图的事件转成 SSE（API 设计 §2.1）。"""
 import json
 import logging
+import queue
+import threading
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 
+import anyio
 from openai import APITimeoutError
 
 from app.common.errors import AppError, NotFoundError
@@ -60,8 +63,36 @@ def prepare(client_id: str, query: str | None, session_id: str | None, selected_
             "assistant_message_id": uuid.uuid4().hex, "selected_doc_id": selected_doc_id}
 
 
-def run_stream(ctx: dict) -> Iterator[str]:
+async def stream_response(ctx: dict) -> AsyncIterator[str]:
+    """供 StreamingResponse 使用：生成在独立线程执行，经队列推送给客户端。
+
+    客户端断开（停止生成）时设置 stop 标志，生成线程在下一个事件处主动结束、
+    关闭大模型流并保存已生成内容（status=stopped）。
+    """
+    q: queue.Queue = queue.Queue()
+    stop = threading.Event()
+
+    def work():
+        try:
+            for chunk in run_stream(ctx, stop):
+                q.put(chunk)
+        finally:
+            q.put(None)
+
+    threading.Thread(target=work, daemon=True, name="chat-stream").start()
+    try:
+        while True:
+            chunk = await anyio.to_thread.run_sync(q.get, abandon_on_cancel=True)
+            if chunk is None:
+                break
+            yield chunk
+    finally:
+        stop.set()
+
+
+def run_stream(ctx: dict, stop: threading.Event | None = None) -> Iterator[str]:
     session, s = ctx["session"], get_settings()
+    stop = stop or threading.Event()
     t0 = time.perf_counter()
     yield sse("start", {"session_id": session["_id"], "user_message_id": ctx["user_message_id"],
                         "assistant_message_id": ctx["assistant_message_id"]})
@@ -76,16 +107,25 @@ def run_stream(ctx: dict) -> Iterator[str]:
     partial = ""
     status = "failed"
     try:
-        for mode, payload in build_query_graph().stream(state_in, stream_mode=["custom", "values"]):
-            if mode == "values":
-                final = payload
-                continue
-            event, data = payload
-            if event == "delta":
-                partial += data["text"]
-            elif event == "replace":
-                partial = partial[:data["start"]] + data["text"] + partial[data["end"]:]
-            yield sse(event, data)
+        stream = build_query_graph().stream(state_in, stream_mode=["custom", "values"])
+        try:
+            for mode, payload in stream:
+                if stop.is_set():
+                    break
+                if mode == "values":
+                    final = payload
+                    continue
+                event, data = payload
+                if event == "delta":
+                    partial += data["text"]
+                elif event == "replace":
+                    partial = partial[:data["start"]] + data["text"] + partial[data["end"]:]
+                yield sse(event, data)
+        finally:
+            stream.close()  # 停止时关闭图与大模型流，不再消耗 token
+        if stop.is_set():
+            status = "stopped"
+            return
 
         status = final.get("outcome", "completed")
         appendix = final.get("appendix") or {}

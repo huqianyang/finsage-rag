@@ -29,7 +29,7 @@ async def chat_stream(req: ChatRequest, x_client_id: str | None = Header(None)):
     client_id = _client(x_client_id)
     ctx = await run_in_threadpool(chat_service.prepare, client_id, req.query, req.session_id,
                                   req.selected_doc_id, req.regenerate_message_id)
-    return StreamingResponse(chat_service.run_stream(ctx), media_type="text/event-stream",
+    return StreamingResponse(chat_service.stream_response(ctx), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
