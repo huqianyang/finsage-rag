@@ -98,7 +98,11 @@ def _resolve_entity(state: QueryState) -> dict:
         return {"entity": None}
 
     docs = list(cands.values())
-    scores = local_models.rerank(mention, [d["entity_text"] or d["document_title"] for d in docs])
+    try:
+        scores = local_models.rerank(mention, [d["entity_text"] or d["document_title"] for d in docs])
+    except Exception as e:  # 降级：无法判断置信度时不锁定实体，按全库检索
+        logger.warning("实体确认重排失败，不锁定实体：%s", e)
+        return {"entity": None}
     ranked = sorted(zip(docs, scores), key=lambda x: x[1], reverse=True)
     top, top_score = ranked[0]
     second = ranked[1][1] if len(ranked) > 1 else 0.0

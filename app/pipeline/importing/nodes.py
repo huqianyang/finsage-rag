@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)\)")
 MAX_VLM_IMAGES = 30  # 单文档最多调用 VLM 的图片数
 MIN_IMAGE_BYTES = 8 * 1024  # 过小的图片多为图标/印章，跳过摘要
+# 文档自称类泛称，作为简称没有区分度，会干扰实体匹配
+GENERIC_ALIASES = {"本公司", "公司", "本行", "我行", "本基金", "基金", "本产品", "产品", "本理财产品",
+                   "理财产品", "本集团", "集团", "管理人", "本办法", "本报告"}
 METADATA_FIELDS = ["document_title", "product_name", "product_code", "institution_name", "risk_level",
                    "industry", "market", "publish_date"]
 
@@ -137,7 +140,8 @@ def metadata_node(state: ImportState) -> dict:
     if meta["publish_date"] and not re.fullmatch(r"\d{4}-\d{2}(-\d{2})?", meta["publish_date"]):
         meta["publish_date"] = ""
     aliases = data.get("aliases") or []
-    meta["aliases"] = [_clean(a) for a in aliases if isinstance(a, str) and _clean(a)][:5]
+    meta["aliases"] = [a for a in (_clean(x) for x in aliases if isinstance(x, str))
+                       if a and a not in GENERIC_ALIASES][:5]
     filled = sum(1 for k in METADATA_FIELDS if meta[k])
     return {"metadata": meta, "_message": f"识别 {filled}/{len(METADATA_FIELDS)} 个字段"}
 
