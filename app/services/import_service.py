@@ -6,6 +6,7 @@
 """
 import hashlib
 import logging
+import re
 import shutil
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -38,6 +39,34 @@ def _safe_name(file_name: str) -> str:
     return name or "unnamed"
 
 
+# 任务临时目录的名字就是 task_id（uuid4().hex，即 32 位小写十六进制）；清扫时只认这种名字，避免误删别的东西
+_TASK_DIR_RE = re.compile(r"[0-9a-f]{32}")
+
+
+def _remove_dir(path: Path | str) -> bool:
+    """删除整个目录；删不掉的文件不再静默忽略，而是记一条警告日志。返回是否已完全删除。
+
+    为什么不用 shutil.rmtree(..., ignore_errors=True)：Windows 上文件可能被同步盘、杀毒软件等临时占用而删不掉，
+    ignore_errors 会悄悄跳过它们，留下"删了一半"的残渣而且没人知道（temp/ 里就出现过）。
+    这里让 rmtree 在每个删不掉的文件上回调 on_error：记下来，继续删别的。
+    """
+    path = Path(path)
+    if not path.exists():
+        return True
+    failed: list[str] = []
+
+    def on_error(_func, p, exc):
+        if not isinstance(exc, FileNotFoundError):  # 已经不存在了，不算失败
+            failed.append(f"{p}（{type(exc).__name__}）")
+
+    shutil.rmtree(path, onexc=on_error)
+    if failed:
+        logger.warning("清理临时目录 %s 时有 %d 项没能删除（可能被同步盘或杀毒软件占用），"
+                       "残留会在下次导入服务启动时清扫；例如：%s", path, len(failed), "；".join(failed[:3]))
+        return False
+    return True
+
+
 def accept_upload(file_name: str, stream: BinaryIO, content_type: str) -> dict:
     """处理单个上传文件，返回 API 设计 §1.3 中 items 的一项。
 
@@ -67,19 +96,19 @@ def accept_upload(file_name: str, stream: BinaryIO, content_type: str) -> dict:
             size += len(chunk)
             if size > limit:
                 f.close()
-                shutil.rmtree(work_dir, ignore_errors=True)
+                _remove_dir(work_dir)
                 return {"file_name": file_name, "accepted": False, "code": "FILE_TOO_LARGE",
                         "message": f"文件超过 {s.upload_max_mb}MB"}
             md5.update(chunk)
             f.write(chunk)
     if size == 0:
-        shutil.rmtree(work_dir, ignore_errors=True)
+        _remove_dir(work_dir)
         return {"file_name": file_name, "accepted": False, "code": "INVALID_ARGUMENT", "message": "文件为空"}
 
     # 2. 同名判断：已存在同名资料 → 覆盖导入，沿用原 doc_id；正在导入中 → 拒绝，避免两个任务互相覆盖
     existing = mongo.documents().find_one({"file_name": file_name})
     if existing and existing.get("status") == "processing":
-        shutil.rmtree(work_dir, ignore_errors=True)
+        _remove_dir(work_dir)
         return {"file_name": file_name, "accepted": False, "code": "DOCUMENT_IMPORTING",
                 "message": "同名文件正在导入中，请稍后再试"}
     doc_id = existing["_id"] if existing else uuid.uuid4().hex
@@ -94,7 +123,7 @@ def accept_upload(file_name: str, stream: BinaryIO, content_type: str) -> dict:
         object_store.upload_file(source_path, local_path)
     except Exception as e:
         logger.exception("上传 MinIO 失败")
-        shutil.rmtree(work_dir, ignore_errors=True)
+        _remove_dir(work_dir)
         return {"file_name": file_name, "accepted": False, "code": "DEPENDENCY_UNAVAILABLE",
                 "message": f"文件存储失败：{e}"}
 
@@ -148,8 +177,8 @@ def _run(state: dict) -> None:
             "status": "failed", "error": {"step": step, "message": message}, "finished_at": now()}})
         mongo.documents().update_one({"_id": doc_id}, {"$set": {"status": "failed", "updated_at": now()}})
     finally:
-        # 无论成功失败都清理临时目录（上传文件和 MinerU 解析结果）
-        shutil.rmtree(state["work_dir"], ignore_errors=True)
+        # 无论成功失败都清理临时目录（上传文件和 MinerU 解析结果）；删不干净会记警告，残留由启动清扫补刀
+        _remove_dir(state["work_dir"])
 
 
 def recover_interrupted() -> int:
@@ -162,7 +191,7 @@ def recover_interrupted() -> int:
     temp_dir = get_settings().temp_dir
     stale = list(mongo.import_tasks().find({"status": {"$in": ["pending", "running"]}}, {"_id": 1, "doc_id": 1}))
     for t in stale:
-        shutil.rmtree(temp_dir / t["_id"], ignore_errors=True)
+        _remove_dir(temp_dir / t["_id"])
         mark_remaining_skipped(t["_id"])
         mongo.import_tasks().update_one({"_id": t["_id"]}, {"$set": {
             "status": "failed", "error": {"step": None, "message": "服务重启，导入中断，请重新上传"},
@@ -170,6 +199,21 @@ def recover_interrupted() -> int:
         mongo.documents().update_one({"_id": t["doc_id"], "status": "processing"},
                                      {"$set": {"status": "failed", "updated_at": now()}})
     return len(stale)
+
+
+def sweep_temp() -> int:
+    """清扫 temp/ 下遗留的任务工作目录，返回完全清掉的个数。服务启动时调用（见 import_app）。
+
+    正常情况下 temp/{task_id} 由 _run 的 finally 删除；删不干净的残渣（见 _remove_dir）靠这里补刀。
+    只处理名字形如 task_id 的子目录，并跳过仍属于进行中任务（pending/running）的目录。
+    """
+    temp_dir = get_settings().temp_dir
+    active = {t["_id"] for t in mongo.import_tasks().find({"status": {"$in": ["pending", "running"]}}, {"_id": 1})}
+    removed = 0
+    for d in list(temp_dir.iterdir()):
+        if d.is_dir() and _TASK_DIR_RE.fullmatch(d.name) and d.name not in active:
+            removed += _remove_dir(d)
+    return removed
 
 
 # ==================== 查询 ====================

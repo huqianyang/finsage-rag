@@ -173,9 +173,7 @@ def metadata_node(state: ImportState) -> dict:
     # 只接受 YYYY-MM-DD 或 YYYY-MM，其他格式（如"2026年一季度"）宁可置空，也不存不规范的值
     if meta["publish_date"] and not re.fullmatch(r"\d{4}-\d{2}(-\d{2})?", meta["publish_date"]):
         meta["publish_date"] = ""
-    aliases = data.get("aliases") or []
-    meta["aliases"] = [a for a in (_clean(x) for x in aliases if isinstance(x, str))
-                       if a and a not in GENERIC_ALIASES][:5]
+    meta["aliases"] = _parse_aliases(data.get("aliases"))
     filled = sum(1 for k in METADATA_FIELDS if meta[k])
     return {"metadata": meta, "_message": f"识别 {filled}/{len(METADATA_FIELDS)} 个字段"}
 
@@ -183,6 +181,20 @@ def metadata_node(state: ImportState) -> dict:
 def _clean(v) -> str:
     """把模型输出的字段值规范成字符串；None 以及字符串 "null"/"None" 一律当作空。"""
     return str(v).strip() if v not in (None, "null", "None") else ""
+
+
+def _parse_aliases(raw) -> list[str]:
+    """把模型返回的 aliases 规整成字符串列表（最多 5 个，去掉空值和"本行"之类的泛称）。
+
+    提示词要求返回数组；万一模型返回成一个字符串（如 "招商银行,招行"），就按常见分隔符拆开，
+    而不是让 for 循环把它拆成一个个单字；其他类型一律当作没有。
+    """
+    if isinstance(raw, str):
+        raw = re.split(r"[,，、;；]+", raw)
+    if not isinstance(raw, list):
+        return []
+    items = (_clean(x) for x in raw if isinstance(x, str))
+    return [a for a in items if a and a not in GENERIC_ALIASES][:5]
 
 
 def _search_text(meta: dict, chunk: dict) -> str:
