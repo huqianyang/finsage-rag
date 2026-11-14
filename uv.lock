@@ -332,7 +332,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "langchain-text-splitters", specifier = ">=0.3" },
     { name = "langgraph", specifier = ">=0.2" },
-    { name = "mcp", specifier = ">=1.2" },
+    { name = "mcp", specifier = ">=2.3" },
     { name = "minio", specifier = ">=7.2" },
     { name = "openai", specifier = ">=1.55" },
     { name = "pydantic-settings", specifier = ">=2.6" },

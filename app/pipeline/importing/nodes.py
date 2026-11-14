@@ -216,8 +216,9 @@ def index_node(state: ImportState) -> dict:
     # 每个切片都相同的字段（资料级元数据）
     common = {
         "doc_id": doc_id, "content_type": state["content_type"],
-        **{k: meta[k][:_LIMITS[k]] for k in METADATA_FIELDS},
-        "source_file": state["file_name"][:512], "source_path": state["source_path"][:1024],
+        **{k: _fit(k, meta[k]) for k in METADATA_FIELDS},
+        "source_file": _fit("source_file", state["file_name"]),
+        "source_path": _fit("source_path", state["source_path"]),
     }
     rows = []
     for i, (chunk, vec) in enumerate(zip(state["chunks"], state["vectors"])):
@@ -238,8 +239,8 @@ def index_node(state: ImportState) -> dict:
     ])))
     doc_row = {
         "doc_id": doc_id, "content_type": state["content_type"],
-        **{k: meta[k][:_LIMITS[k]] for k in ["document_title", "product_name", "product_code",
-                                             "institution_name", "publish_date"]},
+        **{k: _fit(k, meta[k]) for k in ["document_title", "product_name", "product_code",
+                                         "institution_name", "publish_date"]},
         "entity_text": _truncate_bytes(entity_text, 2000),
         "dense_vector": local_models.embed([entity_text])[0],
     }
@@ -250,9 +251,16 @@ def index_node(state: ImportState) -> dict:
     return {"_message": f"写入 {len(rows)} 个切片"}
 
 
-# 元数据字段写入 Milvus 前的最大字符数（略小于集合定义的字节长度，留出余量）
-_LIMITS = {"document_title": 500, "product_name": 250, "product_code": 60, "institution_name": 250,
-           "risk_level": 30, "industry": 60, "market": 60, "publish_date": 30}
+# 各字段写入 Milvus 前的最大 UTF-8 字节数，与 vector_store 中集合定义的 VARCHAR max_length 一致。
+# 注意是字节而不是字符：一个汉字占 3 字节，按字符截断的话，170 个汉字以上的资料名就会超长导致整批写入失败
+_LIMITS = {"document_title": 512, "product_name": 256, "product_code": 64, "institution_name": 256,
+           "risk_level": 32, "industry": 64, "market": 64, "publish_date": 32,
+           "source_file": 512, "source_path": 1024}
+
+
+def _fit(field: str, value: str) -> str:
+    """把字段值截断到该字段在 Milvus 中允许的字节长度内。"""
+    return _truncate_bytes(value, _LIMITS[field])
 
 
 def _truncate_bytes(text: str, max_bytes: int) -> str:

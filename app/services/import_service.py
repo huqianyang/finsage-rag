@@ -157,9 +157,12 @@ def recover_interrupted() -> int:
 
     任务在内存线程池中执行，服务重启后这些任务实际上已经中断，
     如果不处理，导入页会一直显示"导入中"，同名文件也无法重新上传。返回处理的任务数。
+    同时删除这些任务遗留的临时工作目录 temp/{task_id}（正常结束时由 _run 的 finally 删除，中断时没机会删）。
     """
+    temp_dir = get_settings().temp_dir
     stale = list(mongo.import_tasks().find({"status": {"$in": ["pending", "running"]}}, {"_id": 1, "doc_id": 1}))
     for t in stale:
+        shutil.rmtree(temp_dir / t["_id"], ignore_errors=True)
         mark_remaining_skipped(t["_id"])
         mongo.import_tasks().update_one({"_id": t["_id"]}, {"$set": {
             "status": "failed", "error": {"step": None, "message": "服务重启，导入中断，请重新上传"},

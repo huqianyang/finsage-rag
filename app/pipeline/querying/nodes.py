@@ -327,12 +327,16 @@ def _context_text(items: list[dict]) -> str:
 
 
 def _citation(i: int, x: dict) -> dict:
-    """生成第 i 条引用来源（前端渲染为引用卡片）。由系统根据实际使用的资料生成，不由模型编写。"""
+    """生成第 i 条引用来源（前端渲染为引用卡片）。由系统根据实际使用的资料生成，不由模型编写。
+
+    只返回给用户看的字段，不暴露 chunk_id 等内部 ID；doc_id 保留，"查看原文"接口要用它。
+    具体命中了哪些切片记录在消息的 trace 中（只存数据库，不返回前端），排查问题时去那里查。
+    """
     score = round(x["score"], 4) if x.get("score") is not None else None
     if x["source_type"] == "web":
         return {"index": i, "source_type": "web", "title": x["title"], "url": x["url"],
                 "snippet": x["snippet"][:300], "score": score}
-    return {"index": i, "source_type": "kb", "chunk_id": x["chunk_id"], "doc_id": x["doc_id"],
+    return {"index": i, "source_type": "kb", "doc_id": x["doc_id"],
             "document_title": x["document_title"], "content_type": x["content_type"],
             "content_type_label": label_of(x["content_type"]), "product_name": x.get("product_name", ""),
             "product_code": x.get("product_code", ""), "publish_date": x.get("publish_date", ""),
